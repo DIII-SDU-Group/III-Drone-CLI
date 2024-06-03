@@ -7,6 +7,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 
+from iii_drone_interfaces.srv import GetManagedNodes
 from iii_drone_interfaces.action import SupervisorShutdown, SupervisorStart, SupervisorStop, SupervisorRestart
 
 class SystemHandler(Node):
@@ -45,6 +46,12 @@ class SystemHandler(Node):
             '/supervision/supervisor/shutdown',
             callback_group=self.cb_group_1
         )
+        
+        self.get_managed_nodes_client = self.create_client(
+            GetManagedNodes, 
+            '/supervision/supervisor/get_managed_nodes',
+            callback_group=self.cb_group_1
+        )
 
         self._start_send_goal_future = None
         self._start_get_result_future = None
@@ -69,6 +76,29 @@ class SystemHandler(Node):
 
         self._send_goal_future = None
         self._get_result_future = None
+
+    def _get_managed_nodes(self):
+        
+        # Wait for service to be available
+        if not self.get_managed_nodes_client.wait_for_service(timeout_sec=2.0):
+            print('Service not available. Has the supervisor been launched?')
+            return []
+        
+        event = Event()
+        
+        def response_callback(future):
+            event.set()
+            
+        request = GetManagedNodes.Request()
+        future = self.get_managed_nodes_client.call_async(request)
+        future.add_done_callback(response_callback)
+        
+        event.wait()
+        
+        if future.result() is not None:
+            return future.result().managed_nodes
+        
+        return []
 
     def _init_synchronization_objects(self):
         self._response_event = Event()
@@ -133,7 +163,7 @@ class SystemHandler(Node):
             
         goal = SupervisorStart.Goal()
         goal.action = (SupervisorStart.Goal.START_ACTION_CONFIGURE if args.skip_activate else SupervisorStart.Goal.START_ACTION_ACTIVATE)
-        goal.start_to_node = args.up_to_node
+        goal.select_nodes = args.select_nodes
         
         self._send_goal_future = self.supervisor_start_client.send_goal_async(goal,feedback_callback=self._feedback_callback)
         self._send_goal_future.add_done_callback(self._response_callback)
@@ -162,7 +192,7 @@ class SystemHandler(Node):
             
         goal = SupervisorStop.Goal()
         goal.action = (SupervisorStop.Goal.STOP_ACTION_DEACTIVATE if args.skip_cleanup else SupervisorStop.Goal.STOP_ACTION_CLEANUP)
-        goal.stop_from_node = args.down_from_node
+        goal.select_nodes = args.select_nodes
 
         self._send_goal_future = self.supervisor_stop_client.send_goal_async(goal,feedback_callback=self._feedback_callback)
         self._send_goal_future.add_done_callback(self._response_callback)
@@ -191,6 +221,7 @@ class SystemHandler(Node):
             
         goal = SupervisorRestart.Goal()
         goal.restart_type = (SupervisorRestart.Goal.RESTART_TYPE_COLD if args.cold else SupervisorRestart.Goal.RESTART_TYPE_WARM)
+        goal.select_nodes = args.select_nodes
         
         self._send_goal_future = self.supervisor_restart_client.send_goal_async(goal,feedback_callback=self._feedback_callback)
         self._send_goal_future.add_done_callback(self._response_callback)
@@ -281,6 +312,17 @@ class SystemHandler(Node):
             print('Session not running. Use "iii system boot --attach" to start the system and attach to the tmux session.')
             
             return False
+
+    def list_nodes(self, args) -> bool:
+        nodes = self._get_managed_nodes()
+        
+        if len(nodes) == 0:
+            return False
+        
+        for node in nodes:
+            print(f'{node}')
+        
+        return True
         
     def _stop_tmux_session(self):
         if self.tmuxinator_project is None:
@@ -339,6 +381,10 @@ def boot(system, args):
 def attach(system, args):
     return system.attach(args)
 
+@ros_bringup
+def list_nodes(system, args):
+    return system.list_nodes(args)
+
 def initialize(parser):
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument(
@@ -354,7 +400,11 @@ def initialize(parser):
         description='Available actions for system management'
     )
 
-    start_parser = subparsers.add_parser('start', parents=[parent_parser])
+    start_parser = subparsers.add_parser(
+        'start', 
+        parents=[parent_parser],
+        help='Starts the system'
+    )
     start_parser.set_defaults(func=start)
 
     start_parser.add_argument(
@@ -364,29 +414,29 @@ def initialize(parser):
     )
 
     start_parser.add_argument(
-        '--up-to-node',
-        type=str,
-        default="",
-        help='Start the specified node and all its dependencies.'
+        '--select-nodes',
+        nargs='+',
+        default=[],
+        help='Start the specified nodes and all their dependencies.'
     )
 
-    stop_parser = subparsers.add_parser('stop', parents=[parent_parser])
+    stop_parser = subparsers.add_parser('stop', parents=[parent_parser], help='Stops the system')
     stop_parser.set_defaults(func=stop)
 
     stop_parser.add_argument(
-        '--skip-cleanup',
+        "--skip-cleanup",
         action='store_true',
-        help='Will only deactivate the system without cleaning up resources.'
-    )
-    
-    stop_parser.add_argument(
-        '--down-from-node',
-        type=str,
-        default="",
-        help='Stop the specified node and all nodes depending on it.'
+        help='Will only deactivate the system without cleaning it up.'
     )
 
-    restart_parser = subparsers.add_parser('restart', parents=[parent_parser])
+    stop_parser.add_argument(
+        '--select-nodes',
+        nargs='+',
+        default=[],
+        help='Stop the specified nodes and all their dependencies.'
+    )
+
+    restart_parser = subparsers.add_parser('restart', parents=[parent_parser], help='Restarts the system')
     restart_parser.set_defaults(func=restart)
     
     restart_parser.add_argument(
@@ -394,14 +444,21 @@ def initialize(parser):
         action='store_true',
         help='Will cleanup the system before starting it again, otherwise will only deactivate before activating.'
     )
+    
+    restart_parser.add_argument(
+        '--select-nodes',
+        nargs='+',
+        default=[],
+        help='Restart the specified nodes and all their dependencies.'
+    )
 
-    status_parser = subparsers.add_parser('status', parents=[parent_parser])
+    status_parser = subparsers.add_parser('status', parents=[parent_parser], help='Displays the status of the system')
     status_parser.set_defaults(func=status)
     
-    shutdown_parser = subparsers.add_parser('shutdown', parents=[parent_parser])
+    shutdown_parser = subparsers.add_parser('shutdown', parents=[parent_parser], help='Shuts down the system')
     shutdown_parser.set_defaults(func=shutdown)
 
-    boot_parser = subparsers.add_parser('boot', parents=[parent_parser])
+    boot_parser = subparsers.add_parser('boot', parents=[parent_parser], help='Boots the system')
     boot_parser.set_defaults(func=boot)
 
     boot_parser.add_argument(
@@ -410,5 +467,8 @@ def initialize(parser):
         help='Will attach to the tmux session after starting the system.'
     )
     
-    attach_parser = subparsers.add_parser('attach', parents=[parent_parser])
+    attach_parser = subparsers.add_parser('attach', parents=[parent_parser], help='Attaches to the system tmux session')
     attach_parser.set_defaults(func=attach)
+
+    list_nodes_parser = subparsers.add_parser('list-nodes', parents=[parent_parser], help='Lists all managed nodes in the system')
+    list_nodes_parser.set_defaults(func=list_nodes)
