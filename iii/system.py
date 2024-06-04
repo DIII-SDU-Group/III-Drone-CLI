@@ -266,7 +266,8 @@ class SystemHandler(Node):
         self._result_event.wait()
         
         if self._result_ok:
-            self._stop_tmux_session()
+            if not args.keep_session:
+                self._stop_tmux_session()
             print('System shutdown.')
         
         else:
@@ -321,6 +322,20 @@ class SystemHandler(Node):
         
         for node in nodes:
             print(f'{node}')
+        
+        return True
+
+    def kill_session(self, args) -> bool:
+        if not args.force and self.supervisor_start_client.wait_for_server(timeout_sec=2):
+            # Prompt for user confirmation:
+            response = input('Supervisor is still running. Are you sure you want to kill the tmux session? (y/N): ')
+            if response.lower() != 'y':
+                print('Aborted. Use "iii system shutdown" to shut down the system.')
+                return False
+            
+        self._stop_tmux_session()
+        
+        print('Tmux session killed.')
         
         return True
         
@@ -384,6 +399,10 @@ def attach(system, args):
 @ros_bringup
 def list_nodes(system, args):
     return system.list_nodes(args)
+
+@ros_bringup
+def kill_session(system, args):
+    return system.kill_session(args)
 
 def initialize(parser):
     parent_parser = argparse.ArgumentParser(add_help=False)
@@ -458,6 +477,12 @@ def initialize(parser):
     shutdown_parser = subparsers.add_parser('shutdown', parents=[parent_parser], help='Shuts down the system')
     shutdown_parser.set_defaults(func=shutdown)
 
+    shutdown_parser.add_argument(
+        '--keep-session',
+        action='store_true',
+        help='Will not stop the tmux session after shutting down the system.'
+    )
+
     boot_parser = subparsers.add_parser('boot', parents=[parent_parser], help='Boots the system')
     boot_parser.set_defaults(func=boot)
 
@@ -472,3 +497,12 @@ def initialize(parser):
 
     list_nodes_parser = subparsers.add_parser('list-nodes', parents=[parent_parser], help='Lists all managed nodes in the system')
     list_nodes_parser.set_defaults(func=list_nodes)
+
+    kill_session_parser = subparsers.add_parser('kill-session', parents=[parent_parser], help='Kills the system tmux session')
+    kill_session_parser.set_defaults(func=kill_session)
+    
+    kill_session_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Will not prompt for user confirmation.'
+    )
