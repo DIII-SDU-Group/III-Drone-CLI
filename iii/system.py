@@ -2,6 +2,7 @@ import argparse
 import os
 import subprocess
 from threading import Thread, Event
+from time import sleep
 
 import rclpy
 from rclpy.node import Node
@@ -267,6 +268,7 @@ class SystemHandler(Node):
         
         if self._result_ok:
             if not args.keep_session:
+                sleep(1)
                 self._stop_tmux_session()
             print('System shutdown.')
         
