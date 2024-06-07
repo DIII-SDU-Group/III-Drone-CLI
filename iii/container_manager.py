@@ -8,7 +8,7 @@ class ContainerManager:
 
     def build(self) -> bool:
         process = subprocess.Popen(
-            f'docker-compose -f {self.compose_file} --profile "*" build',
+            f'docker compose -f {self.compose_file} --profile "*" build',
             shell=True,
             executable='/bin/bash',
         )
@@ -38,7 +38,7 @@ class ContainerManager:
         # self.compose_project.start(service_names=['iii_drone_build'])
 
         process = subprocess.Popen(
-            f'docker-compose -f {self.compose_file} --profile build run --rm iii_drone_build colcon build {" ".join(colcon_build_args)}',
+            f'docker compose -f {self.compose_file} --profile build run --rm iii_drone_build colcon build {" ".join(colcon_build_args)}',
             shell=True,
             executable='/bin/bash',
         )
@@ -56,7 +56,7 @@ class ContainerManager:
         command: str,
         args: list = []
     ) -> bool:
-        command = f'docker-compose -f {self.compose_file} --profile cli run --rm cli {command} {" ".join(args)}'
+        command = f'docker compose -f {self.compose_file} --profile cli run --rm cli {command} {" ".join(args)}'
         process = subprocess.Popen(
             command,
             shell=True,
