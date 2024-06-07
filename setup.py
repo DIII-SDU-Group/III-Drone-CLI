@@ -6,8 +6,6 @@ setup(
     packages=find_packages(),
     install_requires=[
         'argcomplete',
-        'docker',
-        'docker-compose',
     ],
     entry_points={
         'console_scripts': [
