@@ -106,7 +106,6 @@ class SystemHandler(Node):
         self._get_result_future = None
         
     def start_spin_thread(self):
-        print('Starting spin thread')
         self._multi_threaded_executor = rclpy.executors.MultiThreadedExecutor()
         self._multi_threaded_executor.add_node(self)
         
@@ -297,6 +296,6 @@ class SystemHandler(Node):
                 print('Aborted. Use "iii system shutdown" to shut down the system.')
                 return False
             
-        return self._tmux_handler.kill_session(args)
+        return self._tmux_handler.kill_session()
 
        
