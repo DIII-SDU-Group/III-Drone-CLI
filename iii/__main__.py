@@ -1,6 +1,6 @@
 import argparse
 import argcomplete
-from . import system, config
+from . import system, config, build
 
 def main():
     parser = argparse.ArgumentParser(prog='iii')
@@ -11,6 +11,9 @@ def main():
 
     parser_config = subparsers.add_parser('config', help='Launches configuration manager')
     parser_config.set_defaults(func=config.run, action='run')
+    
+    parser_build = subparsers.add_parser('build', help='Commands for building parts of the system')
+    build.initialize(parser_build)
 
     argcomplete.autocomplete(parser)
 
