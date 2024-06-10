@@ -1,6 +1,7 @@
 import argparse
 import argcomplete
-from . import system, config, build
+from . import system, config, build, deploy
+import sys
 
 def main():
     parser = argparse.ArgumentParser(prog='iii')
@@ -14,6 +15,9 @@ def main():
     
     parser_build = subparsers.add_parser('build', help='Commands for building parts of the system')
     build.initialize(parser_build)
+    
+    parser_deploy = subparsers.add_parser('deploy', help='Commands for deploying parts of the system')
+    deploy.initialize(parser_deploy)
 
     argcomplete.autocomplete(parser)
 
@@ -22,8 +26,12 @@ def main():
         parser.print_help()
     elif args.subcommand == 'config':
         args.func()
-    elif args.action is None:
+    elif args.action is None and args.subcommand == 'system':
         parser_system.print_help()
+    elif args.action is None and args.subcommand == 'build':
+        parser_build.print_help()
+    elif args.action is None and args.subcommand == 'deploy':
+        parser_deploy.print_help()
     else:
         args.func(args)
 
