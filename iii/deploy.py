@@ -272,7 +272,7 @@ def install_tmuxinator_configuration(args):
     print("Installing tmuxinator configuration on host...")
     
     system_install_success, con_success = ssh_manager.execute(
-        f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/scripts/install_tmuxinator_config.sh",
+        f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/scripts/install_tmuxinator_configuration.sh",
     )
     
     if not con_success:
@@ -413,10 +413,10 @@ def deploy_container(args):
         
     ssh_manager = SSHManager()
     
-    print("Saving container image...")
+    print("Pushing container image...")
     
     save_process = subprocess.Popen(
-        "docker save iii_drone_base:latest -o /tmp/iii_drone_base.tar.gz",
+        "docker tag iii_drone_base:latest frnyb/iii_drone_base:latest && docker push frnyb/iii_drone_base:latest",
         shell=True,
         executable='/bin/bash',
     )
@@ -424,40 +424,24 @@ def deploy_container(args):
     save_process.wait()
     
     if save_process.returncode != 0:
-        print('Could not save container image')
+        print('Could not push container image')
         exit(1)
         
-    print("Transfering container image to host...")
+    print("Pulling container image on host...")
         
-    tf_success, con_success = ssh_manager.transfer_to_host(
-        '/tmp/iii_drone_base.tar.gz',
-        '/tmp/iii_drone_base.tar.gz',
-        force=True
+    pull_success, con_success = ssh_manager.execute(
+        "docker pull frnyb/iii_drone_base:latest",
     )
     
     if not con_success:
         print('Could not connect to host. Is the host alive?')
         exit(1)
         
-    if not tf_success:
-        print('Could not transfer container image to host: Unknown error')
+    if not pull_success:
+        print('Could not pull container image on host: Unknown error')
         exit(1)
         
-    print("Loading container image on host...")
-    
-    load_success, con_success = ssh_manager.execute(
-        "docker load -i /tmp/iii_drone_base.tar.gz",
-    )
-    
-    if not con_success:
-        print('Could not connect to host. Is the host alive?')
-        exit(1)
-        
-    if not load_success:
-        print('Could not load container image on host: Unknown error')
-        exit(1)
-        
-    print("Container image deployed successfully. Boot the system using 'iii system boot'")
+    print("Container image deployed successfully. Build the system using 'iii build container' or boot using 'iii system boot' on the host")
     
     exit(0)
     
