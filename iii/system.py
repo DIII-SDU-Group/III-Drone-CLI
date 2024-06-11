@@ -171,6 +171,30 @@ else:
             ]
         )
 
+def up(args):
+    if CLI_CONFIGURATION != 'host':
+        print('This command is only available in host configuration')
+        exit(1)
+        
+    container_manager = ContainerManager()
+    
+    if container_manager.up():
+        exit(0)
+        
+    exit(1)
+        
+def down(args):
+    if CLI_CONFIGURATION != 'host':
+        print('This command is only available in host configuration')
+        exit(1)
+        
+    container_manager = ContainerManager()
+    
+    if container_manager.down():
+        exit(0)
+        
+    exit(1)
+
 def initialize(parser):
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument(

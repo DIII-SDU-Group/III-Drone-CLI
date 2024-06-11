@@ -23,11 +23,39 @@ class ContainerManager:
         
         return True
         
-    # def up(self):
-    #     self.compose_project.up(start=False)
+    def up(self):
+        process = subprocess.Popen(
+            f'docker compose -f {self.compose_file} --profile test up -d',
+            shell=True,
+            executable='/bin/bash',
+        )
         
-    # def down(self):
-    #     self.compose_project.down()
+        process.wait()
+        
+        if process.returncode != 0:
+            print('Failed to start container')
+            return False
+        
+        print('Successfully started container')
+        
+        return True
+        
+    def down(self):
+        process = subprocess.Popen(
+            f'docker compose -f {self.compose_file} --profile test down',
+            shell=True,
+            executable='/bin/bash',
+        )
+        
+        process.wait()
+        
+        if process.returncode != 0:
+            print('Failed to stop container')
+            return False
+        
+        print('Successfully stopped container')
+        
+        return True
         
     def colcon_build(
         self,
