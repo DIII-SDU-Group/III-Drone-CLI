@@ -441,7 +441,7 @@ def deploy_container(args):
         print('Could not pull container image on host: Unknown error')
         exit(1)
         
-    print("Container image deployed successfully. Build the system using 'iii build container' or boot using 'iii system boot' on the host")
+    print("Container image deployed successfully. Launch the container using 'iii system up'")
     
     exit(0)
     
