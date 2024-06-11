@@ -111,7 +111,7 @@ def cross_compile(args):
     os.system(f"cp -rf {WORKSPACE_DIR}/src {WORKSPACE_DIR}/cc_ws/")
     os.system(f"cp -rf {WORKSPACE_DIR}/setup_real.bash {WORKSPACE_DIR}/cc_ws/")
         
-    if args.micro_ros_agent:
+    if args.micro_ros_agent or args.all:
         # Running emulated build of micro_ros_agent
         process = subprocess.Popen(
             "docker run -it --rm --init --privileged --platform linux/arm64 -v ./cc_ws:/home/iii/ws:cached iii_drone_base:latest colcon build --packages-up-to micro_ros_agent --cmake-force-configure --cmake-clean-cache",
@@ -124,6 +124,36 @@ def cross_compile(args):
         
         if process.returncode != 0:
             print('Could not cross-compile micro_ros_agent')
+            exit(1)
+            
+    if args.px4_msgs or args.all:
+        # Running emulated build of px4_msgs
+        process = subprocess.Popen(
+            "docker run -it --rm --init --privileged --platform linux/arm64 -v ./cc_ws:/home/iii/ws:cached iii_drone_base:latest colcon build --packages-up-to px4_msgs --cmake-force-configure --cmake-clean-cache",
+            shell=True,
+            executable='/bin/bash',
+            cwd=WORKSPACE_DIR,
+        )
+        
+        process.wait()
+        
+        if process.returncode != 0:
+            print('Could not cross-compile px4_msgs')
+            exit(1)
+            
+    if args.iii_drone_interfaces or args.all:
+        # Running emulated build of iii_drone_interfaces
+        process = subprocess.Popen(
+            "docker run -it --rm --init --privileged --platform linux/arm64 -v ./cc_ws:/home/iii/ws:cached iii_drone_base:latest colcon build --packages-up-to iii_drone_interfaces --cmake-force-configure --cmake-clean-cache",
+            shell=True,
+            executable='/bin/bash',
+            cwd=WORKSPACE_DIR,
+        )
+        
+        process.wait()
+        
+        if process.returncode != 0:
+            print('Could not cross-compile iii_drone_interfaces')
             exit(1)
             
     # Cross compile workspace
@@ -174,6 +204,24 @@ def initialize(parser):
         "--micro-ros-agent",
         action="store_true",
         help="Also compile micro_ros_agent. This is excluded by default since it requires an emulated build environment.",
+    )
+    
+    parser_cross_compile.add_argument(
+        "--px4-msgs",
+        action="store_true",
+        help="Also compile px4_msgs. This is excluded by default since it requires an emulated build environment.",
+    )
+    
+    parser_cross_compile.add_argument(
+        "--iii-drone-interfaces",
+        action="store_true",
+        help="Also compile iii_drone_interfaces. This is excluded by default since it requires an emulated build environment.",
+    )
+    
+    parser_cross_compile.add_argument(
+        "--all",
+        action="store_true",
+        help="Compile all emulated packages. This is excluded by default since it requires an emulated build environment.",
     )
     
     parser_cross_compile.add_argument(
