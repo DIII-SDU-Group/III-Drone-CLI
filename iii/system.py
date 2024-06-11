@@ -88,7 +88,7 @@ else:
     @host_bringup
     def start(container_manager, args):
         return container_manager.execute_cli(
-            'iii system start',
+            '/home/iii/.local/bin/iii system start',
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--skip-activate' if args.skip_activate else '',
@@ -100,7 +100,7 @@ else:
     @host_bringup
     def stop(container_manager, args):
         return container_manager.execute_cli(
-            'iii system stop',
+            '/home/iii/.local/bin/iii system stop',
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--skip-cleanup' if args.skip_cleanup else '',
@@ -112,7 +112,7 @@ else:
     @host_bringup
     def restart(container_manager, args):
         return container_manager.execute_cli(
-            'iii system restart',
+            '/home/iii/.local/bin/iii system restart',
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--cold' if args.cold else '',
@@ -124,7 +124,7 @@ else:
     @host_bringup
     def status(container_manager, args):
         return container_manager.execute_cli(
-            'iii system status',
+            '/home/iii/.local/bin/iii system status',
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds)
             ]
@@ -133,7 +133,7 @@ else:
     @host_bringup
     def shutdown(container_manager, args):
         return container_manager.execute_cli(
-            'iii system shutdown',
+            '/home/iii/.local/bin/iii system shutdown',
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--keep-session' if args.keep_session else ''
@@ -155,7 +155,7 @@ else:
     @host_bringup
     def list_nodes(container_manager, args):
         return container_manager.execute_cli(
-            'iii system list-nodes',
+            '/home/iii/.local/bin/iii system list-nodes',
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds)
             ]
@@ -164,7 +164,7 @@ else:
     @host_bringup
     def kill_session(container_manager, args):
         return container_manager.execute_cli(
-            'iii system kill-session',
+            '/home/iii/.local/bin/iii system kill-session',
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--force' if args.force else ''
@@ -302,4 +302,4 @@ def initialize(parser):
     up_parser.set_defaults(func=up)
     
     down_parser = subparsers.add_parser('down', help='Stops the containerized system')
-    down_parser.set_defaults(func=down)
+    
