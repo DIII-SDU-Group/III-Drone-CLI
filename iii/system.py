@@ -297,3 +297,9 @@ def initialize(parser):
         action='store_true',
         help='Will not prompt for user confirmation.'
     )
+    
+    up_parser = subparsers.add_parser('up', help='Starts the containerized system')
+    up_parser.set_defaults(func=up)
+    
+    down_parser = subparsers.add_parser('down', help='Stops the containerized system')
+    down_parser.set_defaults(func=down)
