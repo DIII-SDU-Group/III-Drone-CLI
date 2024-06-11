@@ -302,4 +302,5 @@ def initialize(parser):
     up_parser.set_defaults(func=up)
     
     down_parser = subparsers.add_parser('down', help='Stops the containerized system')
+    down_parser.set_defaults(func=down)
     
