@@ -8,7 +8,7 @@ class ContainerManager:
 
     def build(self) -> bool:
         process = subprocess.Popen(
-            f'docker compose -f {self.compose_file} --profile "*" build',
+            f'docker compose -f {self.compose_file} --profile "*" build && docker compose -f {self.compose_file} --profile "*" up --no-start',
             shell=True,
             executable='/bin/bash',
         )

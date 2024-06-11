@@ -90,7 +90,7 @@ class SSHManager:
             destination = destination[:-1]
             
         process = subprocess.Popen(
-            f"sshpass -p $(cat /tmp/III_SSH_PASSWORD) rsync -av --delete {' '.join([f'--exclude={dir}' for dir in exclude_dirs])} {source} {self._user}@{self._host}:{destination}",
+            f"sshpass -p $(cat /tmp/III_SSH_PASSWORD) rsync --rsync-path=\"mkdir -p {destination} && rsync\" -av --delete {' '.join([f'--exclude={dir}' for dir in exclude_dirs])} {source} {self._user}@{self._host}:{destination}",
             shell=True,
             executable='/bin/bash',
         )
@@ -104,6 +104,9 @@ class SSHManager:
                 return False, True
             
         return True, True
+
+    def open_session(self):
+        os.system(f"sshpass -p $(cat /tmp/III_SSH_PASSWORD) ssh -o StrictHostKeyChecking=no {self._user}@{self._host}")
                 
     def _clear_password(self):
         os.remove('/tmp/III_SSH_PASSWORD')
