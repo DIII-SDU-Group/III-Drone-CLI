@@ -29,58 +29,68 @@ def _build_container_host():
         
     exit(1)
     
-def _build_container_remote(push=False):
+def _build_container_remote(
+    push=False,
+    cross_compilation=True,
+    base=True,
+):
     WORKSPACE_DIR = os.getenv('WORKSPACE_DIR')
     
     if WORKSPACE_DIR is None:
         print('WORKSPACE_DIR environment variable is not set. Has the setup_remote.bash script been sourced?')
         exit(1)
 
-    print('Building base container image...')
-        
-    process = subprocess.Popen(
-        f"docker buildx build --platform linux/arm64 -f {WORKSPACE_DIR}/Dockerfile -t iii_drone_base:latest {WORKSPACE_DIR}",
-        shell=True,
-        executable='/bin/bash',
-        cwd=WORKSPACE_DIR,
-    )
-    
-    process.wait()
-    
-    if process.returncode != 0:
-        print('Could not build container image')
+    if not base and not cross_compilation:
+        print('No images to build')
         exit(1)
-        
-    if push:
-        print('Pushing container image...')
-        
+
+    if base:
+        print('Building base container image...')
+            
         process = subprocess.Popen(
-            "docker tag iii_drone_base:latest frnyb/iii_drone_base:latest && docker push frnyb/iii_drone_base:latest",
+            f"docker buildx build --platform linux/arm64 -f {WORKSPACE_DIR}/Dockerfile -t iii_drone_base:latest {WORKSPACE_DIR}",
             shell=True,
             executable='/bin/bash',
+            cwd=WORKSPACE_DIR,
         )
         
         process.wait()
         
         if process.returncode != 0:
-            print('Could not push container image')
+            print('Could not build container image')
             exit(1)
+            
+        if push:
+            print('Pushing container image...')
+            
+            process = subprocess.Popen(
+                "docker tag iii_drone_base:latest frnyb/iii_drone_base:latest && docker push frnyb/iii_drone_base:latest",
+                shell=True,
+                executable='/bin/bash',
+            )
+            
+            process.wait()
+            
+            if process.returncode != 0:
+                print('Could not push container image')
+                exit(1)
 
-    print("Building cross-compilation container image...")
-    
-    process = subprocess.Popen(
-        f"docker build -t iii_cc:latest -f {WORKSPACE_DIR}/Dockerfile.cc {WORKSPACE_DIR}",
-        shell=True,
-        executable='/bin/bash',
-        cwd=WORKSPACE_DIR,
-    )
-    
-    process.wait()
-
-    if process.returncode != 0:
-        print('Could not build cross-compilation container image')
-        exit(1)
+    if cross_compilation:
+        print("Building cross-compilation container image...")
         
+        process = subprocess.Popen(
+            f"docker build -t iii_cc:latest -f {WORKSPACE_DIR}/Dockerfile.cc {WORKSPACE_DIR}",
+            shell=True,
+            executable='/bin/bash',
+            cwd=WORKSPACE_DIR,
+        )
+        
+        process.wait()
+
+        if process.returncode != 0:
+            print('Could not build cross-compilation container image')
+            exit(1)
+            
     print("Container images built successfully. Deploy to target using 'iii deploy container'")
     
     exit(0)
@@ -94,7 +104,14 @@ def build_container(args):
         _build_container_host()
         
     else:
-        _build_container_remote(push=args.push)
+        all_images = args.all or (not args.base and not args.cross_compilation)
+        base_image = args.base or all_images
+        cross_compilation_image = args.cross_compilation or all_images
+        _build_container_remote(
+            push=args.push,
+            cross_compilation=cross_compilation_image,
+            base=base_image,
+        )
 
 def cross_compile(args):
     if CLI_CONFIGURATION != 'remote':
@@ -178,13 +195,31 @@ def build_system(args):
 def initialize(parser):
     subparsers = parser.add_subparsers(dest='action')
     
-    parser_containers = subparsers.add_parser('containers', help='Builds the container images')
-    parser_containers.set_defaults(func=build_container)
+    parser_container = subparsers.add_parser('container', help='Builds the container image')
+    parser_container.set_defaults(func=build_container)
 
-    parser_containers.add_argument(
+    parser_container.add_argument(
         "--push",
         action="store_true",
-        help="Push the built container images to the registry",
+        help="Push the built container image to the registry (only applicable to base image).",
+    )
+    
+    parser_container.add_argument(
+        '--cross-compilation',
+        action='store_true',
+        help='Builds the cross-compilation container image',
+    )
+    
+    parser_container.add_argument(
+        '--base',
+        action='store_true',
+        help='Builds the base container image',
+    )
+    
+    parser_container.add_argument(
+        '--all',
+        action='store_true',
+        help='Builds both the base and cross-compilation container images',
     )
     
     parser_system = subparsers.add_parser('system', help='Builds the ROS2 system')
