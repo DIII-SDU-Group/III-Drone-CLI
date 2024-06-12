@@ -40,7 +40,7 @@ def _run_container():
 def _run_host():
     container_manager = ContainerManager()
     
-    if container_manager.execute_cli('iii config'):
+    if container_manager.execute_cli('/home/iii/.local/bin/iii config'):
         exit(0)
         
     exit(1)
