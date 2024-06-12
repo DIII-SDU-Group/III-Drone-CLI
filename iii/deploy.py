@@ -470,12 +470,27 @@ def synchronize(args):
         
     ssh_manager = SSHManager()
     
-    syncs = [
-        (f"{WORKSPACE_DIR}/cc_ws/src", f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/src",['III-Drone-Core/docs','**/__pycache__']),
-        (f"{WORKSPACE_DIR}/cc_ws/install", f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/install",[]),
-        (f"{WORKSPACE_DIR}/cc_ws/build", f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/build", []),
-        (f"{WORKSPACE_DIR}/cc_ws/log", f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/log", []),
-    ]
+    syncs = []
+    
+    if args.src or args.all:
+        syncs.append(
+            (f"{WORKSPACE_DIR}/src", f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/src",['III-Drone-Core/docs','**/__pycache__']),
+        )
+        
+    if args.install or args.all:
+        syncs.append(
+            (f"{WORKSPACE_DIR}/cc_ws/install", f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/install",[]),
+        )
+        
+    if args.build or args.all:
+        syncs.append(
+            (f"{WORKSPACE_DIR}/cc_ws/build", f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/build", []),
+        )
+        
+    if args.log or args.all:
+        syncs.append(
+            (f"{WORKSPACE_DIR}/cc_ws/log", f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/log", []),
+        )
     
     for src, dest, excludes in syncs:
         print(f"Synchronizing {src} with {dest}...")
@@ -554,6 +569,12 @@ def initialize(parser):
 
     parser_synchronize = subparsers.add_parser('synchronize', help='Synchronizes the workspace with the host')
     parser_synchronize.set_defaults(func=synchronize)
+    
+    parser_synchronize.add_argument('--src', action='store_true', help='Synchronize the src directory')
+    parser_synchronize.add_argument('--install', action='store_true', help='Synchronize the install directory')
+    parser_synchronize.add_argument('--build', action='store_true', help='Synchronize the build directory')
+    parser_synchronize.add_argument('--log', action='store_true', help='Synchronize the log directory')
+    parser_synchronize.add_argument('--all', action='store_true', help='Synchronize all directories')
 
     parser_ssh = subparsers.add_parser('ssh', help='Opens an SSH session to the host')
     parser_ssh.set_defaults(func=ssh)
