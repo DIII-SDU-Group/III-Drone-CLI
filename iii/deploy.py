@@ -9,22 +9,16 @@ if CLI_CONFIGURATION is None:
     print("CLI_CONFIGURATION environment variable is not set. Have you sourced the setup scripts?")
     exit(1)
     
-if CLI_CONFIGURATION not in ['host', 'container', 'remote']:
-    print('Invalid configuration. Please set CLI_CONFIGURATION to "host", "container" or "remote"')
+if CLI_CONFIGURATION not in ['host', 'container', 'remote', 'dev']:
+    print('Invalid configuration. Please set CLI_CONFIGURATION to "host", "container", "remote" or "dev"')
     exit(1)
 
-if CLI_CONFIGURATION == 'container':
-    pass
-    
-elif CLI_CONFIGURATION == 'host':
-    pass
-    
-else:
+if CLI_CONFIGURATION == 'remote':
     from .ssh_manager import SSHManager
     
 def install_git(args, keep_open=False):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy git in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy git in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_BRANCH = os.getenv('III_DRONE_DEPLOYMENT_BRANCH')
@@ -78,8 +72,8 @@ def install_git(args, keep_open=False):
         exit(0)
     
 def install_workspace(args, keep_open=False):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -137,8 +131,8 @@ def install_workspace(args, keep_open=False):
         exit(0)
     
 def install_docker(args, keep_open=False):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -169,8 +163,8 @@ def install_docker(args, keep_open=False):
         exit(0)
 
 def install_dependencies(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -198,8 +192,8 @@ def install_dependencies(args):
     exit(0)
     
 def install_tools(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -227,8 +221,8 @@ def install_tools(args):
     exit(0)
     
 def install_cli(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -256,8 +250,8 @@ def install_cli(args):
     exit(0)
     
 def install_udev_rules(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -285,8 +279,8 @@ def install_udev_rules(args):
     exit(0)
     
 def install_tmuxinator_configuration(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -314,8 +308,8 @@ def install_tmuxinator_configuration(args):
     exit(0)
     
 def install_configuration(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -343,8 +337,8 @@ def install_configuration(args):
     exit(0)
     
 def install_environment(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -372,8 +366,8 @@ def install_environment(args):
     exit(0)
     
 def install_all(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -416,8 +410,8 @@ def install_all(args):
     exit(0)
 
 def install(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
 
     has_target = False
@@ -469,8 +463,8 @@ def install(args):
     exit(0)
     
 def deploy_container(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy container in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy container in remote or dev configuration')
         exit(1)
         
     check_image_process = subprocess.Popen(
@@ -520,8 +514,8 @@ def deploy_container(args):
     exit(0)
     
 def synchronize(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
 
     III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
@@ -588,8 +582,8 @@ def synchronize(args):
     exit(0)
     
 def ssh(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cannot only deploy in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cannot only deploy in remote or dev configuration')
         exit(1)
         
     ssh_manager = SSHManager()

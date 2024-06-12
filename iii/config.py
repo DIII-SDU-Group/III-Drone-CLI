@@ -7,11 +7,11 @@ if CLI_CONFIGURATION is None:
     print("CLI_CONFIGURATION environment variable is not set. Have you sourced the setup scripts?")
     exit(1)
     
-if CLI_CONFIGURATION not in ['host', 'container', 'remote']:
-    print('Invalid configuration. Please set CLI_CONFIGURATION to "host", "container" or "remote"')
+if CLI_CONFIGURATION not in ['host', 'container', 'remote', 'dev']:
+    print('Invalid configuration. Please set CLI_CONFIGURATION to "host", "container", "remote", or "dev"')
     exit(1)
 
-if CLI_CONFIGURATION == 'container':
+if CLI_CONFIGURATION == 'container' or CLI_CONFIGURATION == 'dev':
     from iii_drone_configuration import configuration_client_node
     
 elif CLI_CONFIGURATION == 'host':
@@ -61,7 +61,7 @@ def _run_remote():
     exit(0)
 
 def run():
-    if CLI_CONFIGURATION == 'container':
+    if CLI_CONFIGURATION == 'container' or CLI_CONFIGURATION == 'dev':
         _run_container()
     elif CLI_CONFIGURATION == 'host':
         _run_host()

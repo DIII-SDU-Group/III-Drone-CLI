@@ -8,8 +8,8 @@ if CLI_CONFIGURATION is None:
     print("CLI_CONFIGURATION environment variable is not set. Have you sourced the setup scripts?")
     exit(1)
     
-if CLI_CONFIGURATION not in ['host', 'container', 'remote']:
-    print('Invalid configuration. Please set CLI_CONFIGURATION to "host", "container" or "remote"')
+if CLI_CONFIGURATION not in ['host', 'container', 'remote', 'dev']:
+    print('Invalid configuration. Please set CLI_CONFIGURATION to "host", "container", "remote", or "dev"')
     exit(1)
 
 if CLI_CONFIGURATION == 'container':
@@ -114,8 +114,8 @@ def build_container(args):
         )
 
 def cross_compile(args):
-    if CLI_CONFIGURATION != 'remote':
-        print('Cross compilation can only be done in remote configuration')
+    if CLI_CONFIGURATION not in ['remote', 'dev']:
+        print('Cross compilation can only be done in remote or dev configuration')
         exit(1)
         
     WORKSPACE_DIR = os.getenv('WORKSPACE_DIR')
@@ -126,7 +126,9 @@ def cross_compile(args):
 
     # Preparing workspace for cross-compilation
     os.system(f"cp -rf {WORKSPACE_DIR}/src {WORKSPACE_DIR}/cc_ws/")
-    os.system(f"cp -rf {WORKSPACE_DIR}/setup_real.bash {WORKSPACE_DIR}/cc_ws/")
+    os.system(f"cp -rf {WORKSPACE_DIR}/setup/setup_real.bash {WORKSPACE_DIR}/cc_ws/setup/")
+    os.system(f"cp -rf {workspace_dir}/setup/node_log_levels.bash {workspace_dir}/cc_ws/setup/")
+    os.system(f"cp -rf {workspace_dir}/setup/ros_setup.bash {workspace_dir}/cc_ws/setup/")
         
     if args.micro_ros_agent or args.all:
         # Running emulated build of micro_ros_agent

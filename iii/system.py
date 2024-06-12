@@ -10,11 +10,11 @@ if CLI_CONFIGURATION is None:
     print("CLI_CONFIGURATION environment variable is not set. Have you sourced the setup scripts?")
     exit(1)
     
-if CLI_CONFIGURATION not in ['host', 'container', 'remote']:
-    print('Invalid configuration. Please set CLI_CONFIGURATION to "host", "container" or "remote"')
+if CLI_CONFIGURATION not in ['host', 'container', 'remote', 'dev']:
+    print('Invalid configuration. Please set CLI_CONFIGURATION to "host", "container", "remote", or "dev"')
     exit(1)
     
-if CLI_CONFIGURATION == 'container':
+if CLI_CONFIGURATION in ['container', 'dev']:
     from .system_handler import SystemHandler
 
     import rclpy
