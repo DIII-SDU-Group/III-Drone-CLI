@@ -416,11 +416,57 @@ def install_all(args):
     exit(0)
 
 def install(args):
-    install_git(args, keep_open=True)
-    install_workspace(args, keep_open=True)
-    install_docker(args, keep_open=True)
-    
-    install_all(args)
+    if CLI_CONFIGURATION != 'remote':
+        print('Cannot only deploy in remote configuration')
+        exit(1)
+
+    has_target = False
+        
+    if args.git or args.all:
+        install_git(args, keep_open=True)
+        has_target = True
+        
+    if args.workspace or args.all:
+        install_workspace(args, keep_open=True)
+        has_target = True
+        
+    if args.docker or args.all:
+        install_docker(args, keep_open=True)
+        has_target = True
+        
+    if args.dependencies or args.all:
+        install_dependencies(args)
+        has_target = True
+        
+    if args.tools or args.all:
+        install_tools(args)
+        has_target = True
+        
+    if args.cli or args.all:
+        install_cli(args)
+        has_target = True
+        
+    if args.udev_rules or args.all:
+        install_udev_rules(args)
+        has_target = True
+        
+    if args.tmuxinator_configuration or args.all:
+        install_tmuxinator_configuration(args)
+        has_target = True
+        
+    if args.configuration or args.all:
+        install_configuration(args)
+        has_target = True
+        
+    if args.environment or args.all:
+        install_environment(args)
+        has_target = True
+
+    if not has_target:
+        print('No target specified. Specify a target using --<target> or use --all to install all targets.')
+        exit(1)
+        
+    exit(0)
     
 def deploy_container(args):
     if CLI_CONFIGURATION != 'remote':
@@ -560,44 +606,19 @@ def initialize(parser):
 
     parser_install = subparsers.add_parser('install', help='Installs docker on the host')
     parser_install.set_defaults(func=install)
-    parser_install_action = parser_install.add_subparsers(dest='install_action')
-    
-    parser_install_git = parser_install_action.add_parser('git', help='Clones or updates the deployment repo')
-    parser_install_git.set_defaults(func=install_git)
 
-    parser_install_git.add_argument('--force', action='store_true', help='Force update the deployment repo')
-    
-    parser_install_workspace = parser_install_action.add_parser('workspace', help='Installs the workspace on the host')
-    parser_install_workspace.set_defaults(func=install_workspace)
-
-    parser_install_workspace.add_argument('--force', action='store_true', help='Force update the workspace')
-
-    parser_install_docker = parser_install_action.add_parser('docker', help='Installs docker on the host')
-    parser_install_docker.set_defaults(func=install_docker)
-
-    parser_install_dependencies = parser_install_action.add_parser('dependencies', help='Installs dependencies on the host')
-    parser_install_dependencies.set_defaults(func=install_dependencies)
-    
-    parser_install_tools = parser_install_action.add_parser('tools', help='Installs tools on the host')
-    parser_install_tools.set_defaults(func=install_tools)
-    
-    parser_install_cli = parser_install_action.add_parser('cli', help='Installs the CLI on the host')
-    parser_install_cli.set_defaults(func=install_cli)
-    
-    parser_install_udev_rules = parser_install_action.add_parser('udev-rules', help='Installs udev rules on the host')
-    parser_install_udev_rules.set_defaults(func=install_udev_rules)
-    
-    parser_install_tmuxinator_configuration = parser_install_action.add_parser('tmuxinator-configuration', help='Installs tmuxinator configuration on the host')
-    parser_install_tmuxinator_configuration.set_defaults(func=install_tmuxinator_configuration)
-    
-    parser_install_configuration = parser_install_action.add_parser('configuration', help='Installs configuration on the host')
-    parser_install_configuration.set_defaults(func=install_configuration)
-    
-    parser_install_environment = parser_install_action.add_parser('environment', help='Installs environment on the host')
-    parser_install_environment.set_defaults(func=install_environment)
-    
-    parser_install_all = parser_install_action.add_parser('all', help='Installs dependencies, tools, cli, udev_rules, tmuxinator_configuration, configuration and environment on host. Git, workspace and docker must be installed explicitly first.')
-    parser_install_all.set_defaults(func=install_all)
+    parser_install.add_argument('--git', action='store_true', help='Clones or updates the deployment repo')
+    parser_install.add_argument('--workspace', action='store_true', help='Installs the workspace on the host')
+    parser_install.add_argument('--docker', action='store_true', help='Installs docker on the host')
+    parser_install.add_argument('--dependencies', action='store_true', help='Installs dependencies on the host')
+    parser_install.add_argument('--tools', action='store_true', help='Installs tools on the host')
+    parser_install.add_argument('--cli', action='store_true', help='Installs the CLI on the host')
+    parser_install.add_argument('--udev-rules', action='store_true', help='Installs udev rules on the host')
+    parser_install.add_argument('--tmuxinator-configuration', action='store_true', help='Installs tmuxinator configuration on the host')
+    parser_install.add_argument('--configuration', action='store_true', help='Installs configuration on the host')
+    parser_install.add_argument('--environment', action='store_true', help='Installs environment on the host')
+    parser_install.add_argument('--all', action='store_true', help='Installs all targets on host.')
+    parser_install.add_argument('--force', action='store_true', help='Force update the deployment repo or workspace')
 
     parser_synchronize = subparsers.add_parser('synchronize', help='Synchronizes the workspace with the host')
     parser_synchronize.set_defaults(func=synchronize)
