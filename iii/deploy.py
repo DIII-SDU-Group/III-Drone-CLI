@@ -45,8 +45,15 @@ def install_git(args, keep_open=False):
     ssh_manager = SSHManager()
     
     print("Pulling repository on host...")
+    
+    command = f"[ ! -d ~/{III_DRONE_DEPLOYMENT_DIR_NAME} ] && git clone -b {III_DRONE_DEPLOYMENT_BRANCH} {III_DRONE_DEPLOYMENT_URL} ~/{III_DRONE_DEPLOYMENT_DIR_NAME} || (cd ~/{III_DRONE_DEPLOYMENT_DIR_NAME} && git fetch"
+    
+    if args.force:
+        command += " && git reset --hard"
 
-    pull_success, con_success = ssh_manager.execute(f"[ ! -d ~/{III_DRONE_DEPLOYMENT_DIR_NAME} ] && git clone -b {III_DRONE_DEPLOYMENT_BRANCH} {III_DRONE_DEPLOYMENT_URL} ~/{III_DRONE_DEPLOYMENT_DIR_NAME} || (cd ~/{III_DRONE_DEPLOYMENT_DIR_NAME} && git fetch && git pull)")
+    command += " && git pull)"
+
+    pull_success, con_success = ssh_manager.execute(command)
     
     if not con_success:
         print('Could not connect to host. Is the host alive?')
@@ -90,10 +97,13 @@ def install_workspace(args, keep_open=False):
     ssh_manager = SSHManager()
     
     print("Installing workspace on host...")
+
+    command = f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/scripts/install_workspace.sh {III_DRONE_WORKSPACE_BRANCH} {III_DRONE_WORKSPACE_URL} {III_DRONE_WORKSPACE_DIR_NAME}"
     
-    workspace_install_success, con_success = ssh_manager.execute(
-        f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/scripts/install_workspace.sh {III_DRONE_WORKSPACE_BRANCH} {III_DRONE_WORKSPACE_URL} {III_DRONE_WORKSPACE_DIR_NAME}",
-    )
+    if args.force:
+        command += " --force"
+    
+    workspace_install_success, con_success = ssh_manager.execute(command)
     
     if not con_success:
         print('Could not connect to host. Is the host alive?')
@@ -536,9 +546,13 @@ def initialize(parser):
     
     parser_install_git = parser_install_action.add_parser('git', help='Clones or updates the deployment repo')
     parser_install_git.set_defaults(func=install_git)
+
+    parser_install_git.add_argument('--force', action='store_true', help='Force update the deployment repo')
     
     parser_install_workspace = parser_install_action.add_parser('workspace', help='Installs the workspace on the host')
     parser_install_workspace.set_defaults(func=install_workspace)
+
+    parser_install_workspace.add_argument('--force', action='store_true', help='Force update the workspace')
 
     parser_install_docker = parser_install_action.add_parser('docker', help='Installs docker on the host')
     parser_install_docker.set_defaults(func=install_docker)
