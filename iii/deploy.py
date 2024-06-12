@@ -1,6 +1,7 @@
 import argparse
 import os
 import subprocess
+import time
 
 CLI_CONFIGURATION = os.getenv('CLI_CONFIGURATION')
 
@@ -44,12 +45,20 @@ def install_git(args, keep_open=False):
         
     ssh_manager = SSHManager()
     
+    if args.force:
+        print("Warning: Forcing update will reset the deployment repository to the latest commit. All local changes will be lost.")
+        # Print Continuing in 3 - 2 - 1, update the terminal number:
+        for i in range(5, 0, -1):
+            print("Continuing in " + str(i), end='\r')
+            time.sleep(1)
+            print(" " * 20, end='\r')
+    
     print("Pulling repository on host...")
     
     command = f"[ ! -d ~/{III_DRONE_DEPLOYMENT_DIR_NAME} ] && git clone -b {III_DRONE_DEPLOYMENT_BRANCH} {III_DRONE_DEPLOYMENT_URL} ~/{III_DRONE_DEPLOYMENT_DIR_NAME} || (cd ~/{III_DRONE_DEPLOYMENT_DIR_NAME} && git fetch"
     
     if args.force:
-        command += " && git reset --hard"
+        command += " && git reset --hard && git clean -fdx"
 
     command += " && git pull)"
 
@@ -93,6 +102,15 @@ def install_workspace(args, keep_open=False):
     if III_DRONE_WORKSPACE_URL is None:
         print('III_DRONE_WORKSPACE_URL environment variable is not set. Has the setup_remote.bash script been sourced?')
         exit(1)
+
+    if args.force:
+        print("Warning: Forcing update will reset the workspace repository to the latest commit. All local changes will be lost.")
+        # Print Continuing in 3 - 2 - 1, update the terminal number:
+        for i in range(5, 0, -1):
+            print("Continuing in " + str(i), end='\r')
+            time.sleep(1)
+            print(" " * 20, end='\r')
+    
         
     ssh_manager = SSHManager()
     
