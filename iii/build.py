@@ -129,6 +129,7 @@ def cross_compile(args):
     os.system(f"cp -rf {WORKSPACE_DIR}/setup/setup_real.bash {WORKSPACE_DIR}/cc_ws/setup/")
     os.system(f"cp -rf {WORKSPACE_DIR}/setup/node_log_levels.bash {WORKSPACE_DIR}/cc_ws/setup/")
     os.system(f"cp -rf {WORKSPACE_DIR}/setup/ros_setup.bash {WORKSPACE_DIR}/cc_ws/setup/")
+    os.system(f"cp -rf {WORKSPACE_DIR}/setup/paths.bash {WORKSPACE_DIR}/cc_ws/setup/")
         
     if args.micro_ros_agent or args.all:
         # Running emulated build of micro_ros_agent
