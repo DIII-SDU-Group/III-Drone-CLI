@@ -142,7 +142,7 @@ else:
         
     @host_bringup
     def boot(container_manager, args):
-        tmux_handler = TmuxHandler()
+        tmux_handler = TmuxHandler(hitl=args.hitl)
         
         return tmux_handler.start(attach=args.attach)
         
@@ -281,6 +281,12 @@ def initialize(parser):
         '--attach',
         action='store_true',
         help='Will attach to the tmux session after starting the system.'
+    )
+
+    boot_parser.add_argument(
+        "--hitl",
+        action='store_true',
+        help='Will start the system in HITL mode.'
     )
     
     attach_parser = subparsers.add_parser('attach', parents=[parent_parser], help='Attaches to the system tmux session')
