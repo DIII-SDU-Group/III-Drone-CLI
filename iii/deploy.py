@@ -41,11 +41,7 @@ def install_git(args, keep_open=False):
     
     if args.force:
         print("Warning: Forcing update will reset the deployment repository to the latest commit. All local changes will be lost.")
-        # Print Continuing in 3 - 2 - 1, update the terminal number:
-        for i in range(5, 0, -1):
-            print("Continuing in " + str(i), end='\r')
-            time.sleep(1)
-            print(" " * 20, end='\r')
+        time.sleep(1)
     
     print("Pulling repository on host...")
     
@@ -99,12 +95,7 @@ def install_workspace(args, keep_open=False):
 
     if args.force:
         print("Warning: Forcing update will reset the workspace repository to the latest commit. All local changes will be lost.")
-        # Print Continuing in 3 - 2 - 1, update the terminal number:
-        for i in range(5, 0, -1):
-            print("Continuing in " + str(i), end='\r')
-            time.sleep(1)
-            print(" " * 20, end='\r')
-    
+        time.sleep(1)
         
     ssh_manager = SSHManager()
     
