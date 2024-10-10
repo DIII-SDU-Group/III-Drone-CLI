@@ -4,8 +4,11 @@ from threading import Thread, Event
 from time import sleep
 
 class TmuxHandler:
-    def __init__(self):
-        self._tmuxinator_project = os.environ.get('TMUXINATOR_PROJECT', None)
+    def __init__(self,hitl:bool = False):
+        if not hitl:
+            self._tmuxinator_project = os.environ.get('TMUXINATOR_PROJECT', None)
+        else:
+            self._tmuxinator_project = os.environ.get('TMUXINATOR_PROJECT_HITL', None)
 
         if self._tmuxinator_project is not None:
             cmd = ['tmux', 'ls']

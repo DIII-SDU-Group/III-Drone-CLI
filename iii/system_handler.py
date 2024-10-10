@@ -272,7 +272,8 @@ class SystemHandler(Node):
         return self._result_ok
 
     def boot(self, args) -> bool:
-        return self._tmux_handler.start(args.attach)
+        tmux_handler = TmuxHandler(hitl=args.hitl)
+        return tmux_handler.start(args.attach)
 
     def attach(self, args) -> bool:
         return self._tmux_handler.attach()
