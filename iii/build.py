@@ -137,7 +137,8 @@ def cross_compile(args):
     if args.micro_ros_agent or args.all:
         # Running emulated build of micro_ros_agent
         process = subprocess.Popen(
-            "docker run -it --rm --init --privileged --platform linux/arm64 -v ./cc_ws:/home/iii/ws:cached iii_drone_base:latest colcon build --packages-up-to micro_ros_agent --cmake-force-configure --cmake-clean-cache",
+            "docker run -it --rm --init --privileged --platform linux/arm64 -v ./cc_ws:/home/iii/ws:cached iii_drone_base:latest colcon build --packages-up-to microxrcedds_agent --cmake-force-configure --cmake-clean-cache",
+            # "docker run -it --rm --init --privileged --platform linux/arm64 -v ./cc_ws:/home/iii/ws:cached iii_drone_base:latest colcon build --packages-up-to micro_ros_agent --cmake-force-configure --cmake-clean-cache",
             shell=True,
             executable='/bin/bash',
             cwd=WORKSPACE_DIR,
