@@ -159,6 +159,7 @@ class SystemHandler(Node):
         goal = SupervisorStart.Goal()
         goal.action = (SupervisorStart.Goal.START_ACTION_CONFIGURE if args.skip_activate else SupervisorStart.Goal.START_ACTION_ACTIVATE)
         goal.select_nodes = args.select_nodes
+        goal.ignore_dependencies = args.ignore_dependencies
         
         self._send_goal_future = self.supervisor_start_client.send_goal_async(goal,feedback_callback=self._feedback_callback)
         self._send_goal_future.add_done_callback(self._response_callback)
@@ -188,6 +189,7 @@ class SystemHandler(Node):
         goal = SupervisorStop.Goal()
         goal.action = (SupervisorStop.Goal.STOP_ACTION_DEACTIVATE if args.skip_cleanup else SupervisorStop.Goal.STOP_ACTION_CLEANUP)
         goal.select_nodes = args.select_nodes
+        goal.ignore_dependencies = args.ignore_dependencies
 
         self._send_goal_future = self.supervisor_stop_client.send_goal_async(goal,feedback_callback=self._feedback_callback)
         self._send_goal_future.add_done_callback(self._response_callback)
@@ -217,6 +219,7 @@ class SystemHandler(Node):
         goal = SupervisorRestart.Goal()
         goal.restart_type = (SupervisorRestart.Goal.RESTART_TYPE_COLD if args.cold else SupervisorRestart.Goal.RESTART_TYPE_WARM)
         goal.select_nodes = args.select_nodes
+        goal.ignore_dependencies = args.ignore_dependencies
         
         self._send_goal_future = self.supervisor_restart_client.send_goal_async(goal,feedback_callback=self._feedback_callback)
         self._send_goal_future.add_done_callback(self._response_callback)

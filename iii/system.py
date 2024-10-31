@@ -93,6 +93,7 @@ else:
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--skip-activate' if args.skip_activate else '',
                 '--select-nodes' if len(args.select_nodes) > 0 else '',
+                '--ignore-dependencies' if args.ignore_dependencies else '',
                 *args.select_nodes
             ]
         )
@@ -105,6 +106,7 @@ else:
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--skip-cleanup' if args.skip_cleanup else '',
                 '--select-nodes' if len(args.select_nodes) > 0 else '',
+                '--ignore-dependencies' if args.ignore_dependencies else '',
                 *args.select_nodes
             ]
         )
@@ -117,6 +119,7 @@ else:
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--cold' if args.cold else '',
                 '--select-nodes' if len(args.select_nodes) > 0 else '',
+                '--ignore-dependencies' if args.ignore_dependencies else '',
                 *args.select_nodes
             ]
         )
@@ -229,6 +232,12 @@ def initialize(parser):
         default=[],
         help='Start the specified nodes and all their dependencies.'
     )
+    
+    start_parser.add_argument(
+        '--ignore-dependencies',
+        action="store_true",
+        help='Will only start selected nodes without considering dependencies.'
+    )
 
     stop_parser = subparsers.add_parser('stop', parents=[parent_parser], help='Stops the system')
     stop_parser.set_defaults(func=stop)
@@ -246,6 +255,12 @@ def initialize(parser):
         help='Stop the specified nodes and all their dependencies.'
     )
 
+    stop_parser.add_argument(
+        '--ignore-dependencies',
+        action="store_true",
+        help='Will only stop selected nodes without considering dependencies.'
+    )
+
     restart_parser = subparsers.add_parser('restart', parents=[parent_parser], help='Restarts the system')
     restart_parser.set_defaults(func=restart)
     
@@ -260,6 +275,12 @@ def initialize(parser):
         nargs='+',
         default=[],
         help='Restart the specified nodes and all their dependencies.'
+    )
+
+    restart_parser.add_argument(
+        '--ignore-dependencies',
+        action="store_true",
+        help='Will only restart selected nodes without considering dependencies.'
     )
 
     status_parser = subparsers.add_parser('status', parents=[parent_parser], help='Displays the status of the system')
