@@ -92,7 +92,7 @@ else:
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--skip-activate' if args.skip_activate else '',
-                '--ignore-dependencies' if args.ignore_dependencies else '',
+                '--include-dependencies' if args.include_dependencies else '',
                 '--select-nodes' if len(args.select_nodes) > 0 else '',
                 *args.select_nodes
             ]
@@ -105,7 +105,7 @@ else:
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--skip-cleanup' if args.skip_cleanup else '',
-                '--ignore-dependencies' if args.ignore_dependencies else '',
+                '--include-dependencies' if args.include_dependencies else '',
                 '--select-nodes' if len(args.select_nodes) > 0 else '',
                 *args.select_nodes
             ]
@@ -118,7 +118,7 @@ else:
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--cold' if args.cold else '',
-                '--ignore-dependencies' if args.ignore_dependencies else '',
+                '--include-dependencies' if args.include_dependencies else '',
                 '--select-nodes' if len(args.select_nodes) > 0 else '',
                 *args.select_nodes
             ]
@@ -140,7 +140,7 @@ else:
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--keep-session' if args.keep_session else '',
-                '--ignore-dependencies' if args.ignore_dependencies else '',
+                '--include-dependencies' if args.include_dependencies else '',
                 '--select-nodes' if len(args.select_nodes) > 0 else '',
                 *args.select_nodes
             ]
@@ -233,13 +233,13 @@ def initialize(parser):
         '--select-nodes',
         nargs='+',
         default=[],
-        help='Start the specified nodes and all their dependencies.'
+        help='Start the specified nodes.'
     )
     
     start_parser.add_argument(
-        '--ignore-dependencies',
+        '--include-dependencies',
         action="store_true",
-        help='Will only start selected nodes without considering dependencies.'
+        help='Will also start selected nodes dependencies.'
     )
 
     stop_parser = subparsers.add_parser('stop', parents=[parent_parser], help='Stops the system')
@@ -255,13 +255,13 @@ def initialize(parser):
         '--select-nodes',
         nargs='+',
         default=[],
-        help='Stop the specified nodes and all their dependencies.'
+        help='Stop the specified nodes.'
     )
 
     stop_parser.add_argument(
-        '--ignore-dependencies',
+        '--include-dependencies',
         action="store_true",
-        help='Will only stop selected nodes without considering dependencies.'
+        help='Will also stop selected nodes dependencies.'
     )
 
     restart_parser = subparsers.add_parser('restart', parents=[parent_parser], help='Restarts the system')
@@ -277,13 +277,13 @@ def initialize(parser):
         '--select-nodes',
         nargs='+',
         default=[],
-        help='Restart the specified nodes and all their dependencies.'
+        help='Restart the specified nodes.'
     )
 
     restart_parser.add_argument(
-        '--ignore-dependencies',
+        '--include-dependencies',
         action="store_true",
-        help='Will only restart selected nodes without considering dependencies.'
+        help='Will also restart selected nodes dependencies.'
     )
 
     status_parser = subparsers.add_parser('status', parents=[parent_parser], help='Displays the status of the system')
@@ -301,12 +301,12 @@ def initialize(parser):
         "--select-nodes",
         nargs='+',
         default=[],
-        help='Shutdown the specified nodes and all their dependencies.'
+        help='Shutdown the specified nodes.'
     )
     shutdown_parser.add_argument(
-        '--ignore-dependencies',
+        '--include-dependencies',
         action="store_true",
-        help='Will only shutdown selected nodes without considering dependencies.'
+        help='Will also shutdown selected nodes dependencies.'
     )
 
     boot_parser = subparsers.add_parser('boot', parents=[parent_parser], help='Boots the system')
