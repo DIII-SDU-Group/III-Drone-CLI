@@ -92,8 +92,8 @@ else:
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--skip-activate' if args.skip_activate else '',
-                '--select-nodes' if len(args.select_nodes) > 0 else '',
                 '--ignore-dependencies' if args.ignore_dependencies else '',
+                '--select-nodes' if len(args.select_nodes) > 0 else '',
                 *args.select_nodes
             ]
         )
@@ -105,8 +105,8 @@ else:
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--skip-cleanup' if args.skip_cleanup else '',
-                '--select-nodes' if len(args.select_nodes) > 0 else '',
                 '--ignore-dependencies' if args.ignore_dependencies else '',
+                '--select-nodes' if len(args.select_nodes) > 0 else '',
                 *args.select_nodes
             ]
         )
@@ -118,8 +118,8 @@ else:
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
                 '--cold' if args.cold else '',
-                '--select-nodes' if len(args.select_nodes) > 0 else '',
                 '--ignore-dependencies' if args.ignore_dependencies else '',
+                '--select-nodes' if len(args.select_nodes) > 0 else '',
                 *args.select_nodes
             ]
         )
@@ -139,7 +139,10 @@ else:
             '/home/iii/.local/bin/iii system shutdown',
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
-                '--keep-session' if args.keep_session else ''
+                '--keep-session' if args.keep_session else '',
+                '--ignore-dependencies' if args.ignore_dependencies else '',
+                '--select-nodes' if len(args.select_nodes) > 0 else '',
+                *args.select_nodes
             ]
         )
         
@@ -293,6 +296,17 @@ def initialize(parser):
         '--keep-session',
         action='store_true',
         help='Will not stop the tmux session after shutting down the system.'
+    )
+    shutdown_parser.add_argument(
+        "--select-nodes",
+        nargs='+',
+        default=[],
+        help='Shutdown the specified nodes and all their dependencies.'
+    )
+    shutdown_parser.add_argument(
+        '--ignore-dependencies',
+        action="store_true",
+        help='Will only shutdown selected nodes without considering dependencies.'
     )
 
     boot_parser = subparsers.add_parser('boot', parents=[parent_parser], help='Boots the system')

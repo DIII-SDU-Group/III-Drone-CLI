@@ -252,6 +252,8 @@ class SystemHandler(Node):
             return False
             
         goal = SupervisorShutdown.Goal()
+        goal.select_nodes = args.select_nodes
+        goal.ignore_dependencies = args.ignore_dependencies
 
         self._send_goal_future = self.supervisor_shutdown_client.send_goal_async(goal,feedback_callback=self._feedback_callback)
         self._send_goal_future.add_done_callback(self._response_callback)
@@ -264,7 +266,7 @@ class SystemHandler(Node):
         self._result_event.wait()
         
         if self._result_ok:
-            if not args.keep_session:
+            if not args.keep_session and len(args.select_nodes) == 0:
                 sleep(1)
                 self._tmux_handler.kill_session()
             print('System shutdown.')
