@@ -3,6 +3,7 @@ import os
 import subprocess
 from threading import Thread, Event
 from time import sleep
+import yaml
 
 CLI_CONFIGURATION = os.getenv('CLI_CONFIGURATION')
 
@@ -200,6 +201,17 @@ def down(args):
         exit(0)
         
     exit(1)
+    
+def SelectNodesCompleter(**kwargs):
+    supervisor_config_file = os.environ.get("SUPERVISOR_CONFIG_FILE")
+
+    config = yaml.safe_load(open(supervisor_config_file, 'r'))
+    
+    nodes = config["managed_nodes"]
+    
+    keys = [str(key) for key in nodes.keys()]
+    
+    return keys
 
 def initialize(parser):
     parent_parser = argparse.ArgumentParser(add_help=False)
@@ -234,7 +246,7 @@ def initialize(parser):
         nargs='+',
         default=[],
         help='Start the specified nodes.'
-    )
+    ).completer = SelectNodesCompleter
     
     start_parser.add_argument(
         '--include-dependencies',
@@ -256,7 +268,7 @@ def initialize(parser):
         nargs='+',
         default=[],
         help='Stop the specified nodes.'
-    )
+    ).completer = SelectNodesCompleter
 
     stop_parser.add_argument(
         '--include-dependencies',
@@ -278,7 +290,7 @@ def initialize(parser):
         nargs='+',
         default=[],
         help='Restart the specified nodes.'
-    )
+    ).completer = SelectNodesCompleter
 
     restart_parser.add_argument(
         '--include-dependencies',
@@ -302,7 +314,7 @@ def initialize(parser):
         nargs='+',
         default=[],
         help='Shutdown the specified nodes.'
-    )
+    ).completer = SelectNodesCompleter
     shutdown_parser.add_argument(
         '--include-dependencies',
         action="store_true",
