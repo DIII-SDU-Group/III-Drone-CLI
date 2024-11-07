@@ -139,7 +139,7 @@ else:
             '/home/iii/.local/bin/iii system shutdown',
             [
                 '--server-timeout-seconds', str(args.server_timeout_seconds),
-                '--keep-session' if args.keep_session else '',
+                '--kill-session' if args.kill_session else '',
                 '--include-dependencies' if args.include_dependencies else '',
                 '--select-nodes' if len(args.select_nodes) > 0 else '',
                 *args.select_nodes
@@ -293,9 +293,9 @@ def initialize(parser):
     shutdown_parser.set_defaults(func=shutdown)
 
     shutdown_parser.add_argument(
-        '--keep-session',
+        '--kill-session',
         action='store_true',
-        help='Will not stop the tmux session after shutting down the system.'
+        help='Will kill the tmux session after shutting down the system.'
     )
     shutdown_parser.add_argument(
         "--select-nodes",

@@ -266,7 +266,7 @@ class SystemHandler(Node):
         self._result_event.wait()
         
         if self._result_ok:
-            if not args.keep_session and len(args.select_nodes) == 0:
+            if args.kill_session and len(args.select_nodes) == 0:
                 sleep(1)
                 self._tmux_handler.kill_session()
             print('System shutdown.')
