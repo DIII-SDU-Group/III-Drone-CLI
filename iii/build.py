@@ -132,7 +132,7 @@ def cross_compile(args):
     # os.system(f"cp -rf {WORKSPACE_DIR}/setup/paths.bash {WORKSPACE_DIR}/cc_ws/setup/")
 
     os.system(f"rsync -av {WORKSPACE_DIR}/src {WORKSPACE_DIR}/cc_ws")
-    os.system(f"rsync -av {WORKSPACE_DIR}/setup {WORKSPACE_DIR}/cc_ws/setup")
+    os.system(f"rsync -av {WORKSPACE_DIR}/setup/* {WORKSPACE_DIR}/cc_ws/setup")
         
     if args.micro_ros_agent or args.all:
         # Running emulated build of micro_ros_agent
