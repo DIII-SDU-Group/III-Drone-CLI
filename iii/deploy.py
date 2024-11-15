@@ -571,6 +571,83 @@ def synchronize(args):
     print("Workspace synchronized successfully")
     
     exit(0)
+
+def pull_rosbags(args):
+    if CLI_CONFIGURATION != 'remote':
+        print('Cannot only pull rosbags in remote configuration')
+        exit(1)
+        
+    III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
+    
+    if III_DRONE_DEPLOYMENT_DIR_NAME is None:
+        print('III_DRONE_DEPLOYMENT_DIR_NAME environment variable is not set. Has the setup_remote.bash script been sourced?')
+        exit(1)
+
+    III_DRONE_WORKSPACE_DIR_NAME = os.getenv('III_DRONE_WORKSPACE_DIR_NAME')
+    
+    if III_DRONE_WORKSPACE_DIR_NAME is None:
+        print('III_DRONE_WORKSPACE_DIR_NAME environment variable is not set. Has the setup_remote.bash script been sourced?')
+        exit(1)
+
+    WORKSPACE_DIR = os.getenv('WORKSPACE_DIR')
+    
+    if WORKSPACE_DIR is None:
+        print('WORKSPACE_DIR environment variable is not set. Has the setup_remote.bash script been sourced?')
+        exit(1)
+        
+    ssh_manager = SSHManager()
+    
+    sync_success, con_success = ssh_manager.reverse_sync(
+        f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/rosbags",
+        f"{WORKSPACE_DIR}/rosbags"
+    )
+    
+    if not con_success:
+        print('Could not connect to host. Is the host alive?')
+        exit(1)
+        
+    if not sync_success:
+        print('Could not pull rosbags: Unknown error')
+        exit(1)
+
+def pull_src(args):
+    if CLI_CONFIGURATION != 'remote':
+        print('Cannot only pull rosbags in remote configuration')
+        exit(1)
+        
+    III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
+    
+    if III_DRONE_DEPLOYMENT_DIR_NAME is None:
+        print('III_DRONE_DEPLOYMENT_DIR_NAME environment variable is not set. Has the setup_remote.bash script been sourced?')
+        exit(1)
+
+    III_DRONE_WORKSPACE_DIR_NAME = os.getenv('III_DRONE_WORKSPACE_DIR_NAME')
+    
+    if III_DRONE_WORKSPACE_DIR_NAME is None:
+        print('III_DRONE_WORKSPACE_DIR_NAME environment variable is not set. Has the setup_remote.bash script been sourced?')
+        exit(1)
+
+    WORKSPACE_DIR = os.getenv('WORKSPACE_DIR')
+    
+    if WORKSPACE_DIR is None:
+        print('WORKSPACE_DIR environment variable is not set. Has the setup_remote.bash script been sourced?')
+        exit(1)
+        
+    ssh_manager = SSHManager()
+    
+    sync_success, con_success = ssh_manager.reverse_sync(
+        f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/src",
+        f"{WORKSPACE_DIR}/src"
+    )
+    
+    if not con_success:
+        print('Could not connect to host. Is the host alive?')
+        exit(1)
+        
+    if not sync_success:
+        print('Could not pull rosbags: Unknown error')
+        exit(1)
+    
     
 def ssh(args):
     if CLI_CONFIGURATION not in ['remote', 'dev']:
@@ -617,5 +694,9 @@ def initialize(parser):
     parser_ssh = subparsers.add_parser('ssh', help='Opens an SSH session to the host')
     parser_ssh.set_defaults(func=ssh)
 
+    parser_pull_rosbags = subparsers.add_parser('pull_rosbags', help='Pulls rosbags from the host')
+    parser_pull_rosbags.set_defaults(func=pull_rosbags)
     
+    parser_pull_src = subparsers.add_parser('pull_src', help='Pulls src from the host')
+    parser_pull_src.set_defaults(func=pull_src)
     

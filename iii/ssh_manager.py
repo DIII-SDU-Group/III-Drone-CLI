@@ -104,6 +104,35 @@ class SSHManager:
                 return False, True
             
         return True, True
+    
+    def reverse_sync(
+        self,
+        source,
+        destination,
+        exclude_dirs=[],
+    ):
+        # Return (sync succeeded, connection succeeded)
+        if source[-1] != '/':
+            source += '/'
+            
+        if destination[-1] == '/':
+            destination = destination[:-1]
+            
+        process = subprocess.Popen(
+            f"sshpass -p $(cat /tmp/III_SSH_PASSWORD) rsync --rsync-path=\"mkdir -p {destination} && rsync\" -av --delete {' '.join([f'--exclude={dir}' for dir in exclude_dirs])} {self._user}@{self._host}:{destination} {source}",
+            shell=True,
+            executable='/bin/bash',
+        )
+        
+        process.wait()
+        
+        if process.returncode != 0:
+            if process.returncode == 255:
+                return False, False
+            else:
+                return False, True
+            
+        return True, True
 
     def open_session(self):
         os.system(f"sshpass -p $(cat /tmp/III_SSH_PASSWORD) ssh -o StrictHostKeyChecking=no {self._user}@{self._host}")
