@@ -597,9 +597,12 @@ def pull_rosbags(args):
         
     ssh_manager = SSHManager()
     
+    from_dir = f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/rosbags"
+    to_dir = f"{WORKSPACE_DIR}/rosbags"
+    
     sync_success, con_success = ssh_manager.reverse_sync(
-        f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/{III_DRONE_WORKSPACE_DIR_NAME}/rosbags",
-        f"{WORKSPACE_DIR}/rosbags"
+        from_dir,
+        to_dir
     )
     
     if not con_success:

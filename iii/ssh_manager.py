@@ -119,7 +119,7 @@ class SSHManager:
             destination = destination[:-1]
             
         process = subprocess.Popen(
-            f"sshpass -p $(cat /tmp/III_SSH_PASSWORD) rsync --rsync-path=\"mkdir -p {destination} && rsync\" -av --delete {' '.join([f'--exclude={dir}' for dir in exclude_dirs])} {self._user}@{self._host}:{destination} {source}",
+            f"sshpass -p $(cat /tmp/III_SSH_PASSWORD) rsync -av --delete {' '.join([f'--exclude={dir}' for dir in exclude_dirs])} {self._user}@{self._host}:{source} {destination}",
             shell=True,
             executable='/bin/bash',
         )
