@@ -1,3 +1,10 @@
+"""System-management command wiring for the III CLI.
+
+This module presents a single user-facing command surface while dispatching to
+either ROS-native handlers or host/container forwarding helpers depending on
+`CLI_CONFIGURATION`.
+"""
+
 import argparse
 import os
 import subprocess

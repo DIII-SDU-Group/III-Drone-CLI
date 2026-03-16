@@ -1,3 +1,9 @@
+"""Configuration-client entry points for the III CLI.
+
+Depending on the CLI mode, this module either launches the local configuration
+client directly or forwards the request into the container or remote host.
+"""
+
 import os
 import subprocess
 
