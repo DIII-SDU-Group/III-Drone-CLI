@@ -1,3 +1,5 @@
+"""SSH, SCP, and rsync helpers used by remote CLI workflows."""
+
 import subprocess
 import os
 import getpass

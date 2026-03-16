@@ -1,3 +1,9 @@
+"""ROS-native system-management client used by container/dev CLI modes.
+
+`SystemHandler` talks directly to supervisor actions and services when the CLI
+is already running in a ROS-capable environment.
+"""
+
 import argparse
 import os
 import subprocess

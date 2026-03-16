@@ -1,3 +1,9 @@
+"""Docker Compose wrapper utilities used by host-side CLI commands.
+
+`ContainerManager` centralizes the shell commands used to build, start, stop,
+and enter containerized III workflows from a host machine.
+"""
+
 import os
 import subprocess
 

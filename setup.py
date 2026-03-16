@@ -7,6 +7,7 @@ setup(
     install_requires=[
         'argcomplete',
     ],
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'iii = iii.__main__:main',

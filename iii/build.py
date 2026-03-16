@@ -1,3 +1,10 @@
+"""Build subcommands for the III CLI.
+
+This module handles container-image builds, workspace builds, and
+cross-compilation flows while delegating environment-specific execution to
+container or remote helpers.
+"""
+
 import argparse
 import os
 import subprocess
