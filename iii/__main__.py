@@ -1,3 +1,5 @@
+"""Top-level `iii` CLI entry point and subcommand dispatcher."""
+
 import argparse
 import argcomplete
 from . import system, config, build, deploy

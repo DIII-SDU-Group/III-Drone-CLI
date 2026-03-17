@@ -1,3 +1,9 @@
+"""Remote deployment subcommands for the III CLI.
+
+This module coordinates repository installation, workspace setup, dependency
+installation, and related deployment tasks over SSH-driven host access.
+"""
+
 import argparse
 import os
 import subprocess

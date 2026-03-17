@@ -1,3 +1,5 @@
+"""tmux/tmuxinator session helpers used by host-side system commands."""
+
 import os
 import subprocess
 from threading import Thread, Event
