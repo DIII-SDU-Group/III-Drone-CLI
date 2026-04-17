@@ -21,6 +21,42 @@ class DaemonClient:
         self.daemon_log = Path(
             os.environ.get("III_SYSTEM_DAEMON_LOG", runtime_dir / "system_manager.log")
         ).expanduser()
+        self.systemd_service = os.environ.get("III_SYSTEMD_DAEMON_SERVICE", "iii-system-daemon.service")
+
+    @staticmethod
+    def _systemctl_command(*args: str) -> list[str]:
+        command = ["systemctl", *args]
+        if os.geteuid() != 0:
+            command = ["sudo", "-n", *command]
+        return command
+
+    @staticmethod
+    def _assert_systemd_available() -> None:
+        result = subprocess.run(
+            ["systemctl", "is-system-running"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        output = f"{result.stdout}\n{result.stderr}".lower()
+        unavailable_markers = (
+            "offline",
+            "not been booted with systemd",
+            "failed to connect to bus",
+            "host is down",
+        )
+        if any(marker in output for marker in unavailable_markers):
+            raise RuntimeError(
+                "System daemon must be managed by systemd, but systemd is not available. "
+                "Rebuild/restart the devcontainer with systemd enabled."
+            )
+
+    def _systemd_service_is_active(self) -> bool:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", self.systemd_service],
+            check=False,
+        )
+        return result.returncode == 0
 
     def _request(self, payload: dict) -> dict:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -49,27 +85,23 @@ class DaemonClient:
         return True
 
     def ensure_running(self, timeout_seconds: float = 10.0) -> None:
+        self._assert_systemd_available()
+
         if self.ping():
+            if not self._systemd_service_is_active():
+                raise RuntimeError(
+                    f"System daemon socket is responding, but {self.systemd_service} is not active. "
+                    "Stop the stray daemon process and start the systemd service."
+                )
             return
 
         if self.socket_path.exists():
             self.socket_path.unlink()
 
         self.daemon_log.parent.mkdir(parents=True, exist_ok=True)
-        log_file = open(self.daemon_log, "a", encoding="utf-8")
-        subprocess.Popen(
-            [
-                "ros2",
-                "run",
-                "iii_drone_supervision",
-                "system_daemon",
-                "--socket",
-                str(self.socket_path),
-            ],
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
+        subprocess.run(
+            self._systemctl_command("start", self.systemd_service),
+            check=True,
         )
 
         deadline = time.time() + timeout_seconds
@@ -128,6 +160,18 @@ class DaemonClient:
 
     def list_nodes(self) -> list[str]:
         return self._request({"command": "list_nodes"})["managed_nodes"]
+
+    def list_services(self) -> list[str]:
+        return self._request({"command": "list_services"})["services"]
+
+    def service_start(self, service_id: str) -> dict:
+        return self._request({"command": "service_start", "service_id": service_id})
+
+    def service_stop(self, service_id: str) -> dict:
+        return self._request({"command": "service_stop", "service_id": service_id})
+
+    def service_restart(self, service_id: str) -> dict:
+        return self._request({"command": "service_restart", "service_id": service_id})
 
     def log_dir(self, entity_id: str) -> str:
         return self._request({"command": "log_dir", "entity_id": entity_id})["log_dir"]

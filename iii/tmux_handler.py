@@ -2,7 +2,37 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+
+
+TMUX_ENVIRONMENT_NAMES = {
+    "BEHAVIOR_TREES_DIR",
+    "CLI_CONFIGURATION",
+    "CONFIG_BASE_DIR",
+    "CYCLONEDDS_URI",
+    "DEBUGGABLE_NODES",
+    "LD_LIBRARY_PATH",
+    "MISSION_SPECIFICATION_DIR",
+    "NODE_MANAGEMENT_CONFIG_DIR",
+    "PATH",
+    "PKG_CONFIG_PATH",
+    "PYTHONPATH",
+    "RMW_IMPLEMENTATION",
+    "SIMULATION",
+    "SIMULATION_CONFIG_DIR",
+    "WORKSPACE_DIR",
+}
+
+TMUX_ENVIRONMENT_PREFIXES = (
+    "AMENT_",
+    "CMAKE_",
+    "COLCON_",
+    "GZ_",
+    "III_",
+    "IGN_",
+    "ROS_",
+)
 
 
 class TmuxHandler:
@@ -20,12 +50,32 @@ class TmuxHandler:
     def session_running(self, session_name: str) -> bool:
         return session_name in self._list_sessions()
 
+    def _environment_flags(self) -> list[str]:
+        flags: list[str] = []
+        for key, value in sorted(os.environ.items()):
+            if key in TMUX_ENVIRONMENT_NAMES or key.startswith(TMUX_ENVIRONMENT_PREFIXES):
+                flags.extend(["-e", f"{key}={value}"])
+        return flags
+
+    def _pane_command(self, command: str) -> str:
+        if command.strip() == "bash":
+            return command
+        return "\n".join(
+            [
+                command,
+                "status=$?",
+                "printf '\\n[tmux pane command exited with status %s]\\n' \"$status\"",
+                "exec bash",
+            ]
+        )
+
     def start(self, session_spec: dict, attach: bool = False) -> bool:
         session_name = session_spec["session_name"]
         if self.session_running(session_name):
             print('System already booted. Use "iii system attach" to attach to the tmux session.')
             return False
 
+        environment_flags = self._environment_flags()
         first_window = session_spec["windows"][0]
         first_pane = first_window["panes"][0]
         subprocess.run(
@@ -33,36 +83,38 @@ class TmuxHandler:
                 "tmux",
                 "new-session",
                 "-d",
+                *environment_flags,
                 "-s",
                 session_name,
                 "-n",
                 first_window["name"],
                 "bash",
                 "-lc",
-                first_pane["command"],
+                self._pane_command(first_pane["command"]),
             ],
             check=True,
         )
         self._set_pane_title(session_name, first_window["name"], 0, first_pane["title"])
-        self._populate_window(session_name, first_window)
+        self._populate_window(session_name, first_window, environment_flags)
 
         for window in session_spec["windows"][1:]:
             subprocess.run(
                 [
                     "tmux",
                     "new-window",
+                    *environment_flags,
                     "-t",
                     session_name,
                     "-n",
                     window["name"],
                     "bash",
                     "-lc",
-                    window["panes"][0]["command"],
+                    self._pane_command(window["panes"][0]["command"]),
                 ],
                 check=True,
             )
             self._set_pane_title(session_name, window["name"], 0, window["panes"][0]["title"])
-            self._populate_window(session_name, window)
+            self._populate_window(session_name, window, environment_flags)
 
         subprocess.run(
             ["tmux", "select-window", "-t", f"{session_name}:{session_spec['startup_window']}"],
@@ -75,17 +127,18 @@ class TmuxHandler:
         print('System booted. Use "iii system start" to start the system.')
         return True
 
-    def _populate_window(self, session_name: str, window: dict) -> None:
+    def _populate_window(self, session_name: str, window: dict, environment_flags: list[str]) -> None:
         for index, pane in enumerate(window["panes"][1:], start=1):
             subprocess.run(
                 [
                     "tmux",
                     "split-window",
+                    *environment_flags,
                     "-t",
                     f"{session_name}:{window['name']}",
                     "bash",
                     "-lc",
-                    pane["command"],
+                    self._pane_command(pane["command"]),
                 ],
                 check=True,
             )
