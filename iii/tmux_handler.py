@@ -1,91 +1,124 @@
-"""tmux/tmuxinator session helpers used by host-side system commands."""
+"""tmux session helpers derived from the canonical system specification."""
 
-import os
+from __future__ import annotations
+
 import subprocess
-from threading import Thread, Event
-from time import sleep
+
 
 class TmuxHandler:
-    def __init__(self,hitl:bool = False):
-        if not hitl:
-            self._tmuxinator_project = os.environ.get('TMUXINATOR_PROJECT', None)
-        else:
-            self._tmuxinator_project = os.environ.get('TMUXINATOR_PROJECT_HITL', None)
+    def _list_sessions(self) -> set[str]:
+        process = subprocess.run(
+            ["tmux", "list-sessions", "-F", "#{session_name}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if process.returncode != 0:
+            return set()
+        return {line.strip() for line in process.stdout.splitlines() if line.strip()}
 
-        if self._tmuxinator_project is not None:
-            cmd = ['tmux', 'ls']
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdout, stderr = process.communicate()
-            self._tmux_session_running = self._tmuxinator_project in stdout.decode('utf-8')
-        else:
-            self._tmux_session_running = False
-            
-    @property
-    def session_running(self) -> bool:
-        return self._tmux_session_running
-    
-    @property
-    def tmuxinator_project(self) -> str:
-        return self._tmuxinator_project
-    
-    def start(
-        self,
-        attach: bool = False
-    ) -> bool:
-        if self._tmuxinator_project is None:
-            print('TMUXINATOR_PROJECT environment variable not set. Cannot boot system.')
+    def session_running(self, session_name: str) -> bool:
+        return session_name in self._list_sessions()
+
+    def start(self, session_spec: dict, attach: bool = False) -> bool:
+        session_name = session_spec["session_name"]
+        if self.session_running(session_name):
+            print('System already booted. Use "iii system attach" to attach to the tmux session.')
             return False
 
-        if self._tmux_session_running:
-            print ('System already booted. Use "iii system attach" to attach to the tmux session.')
-            
-            return False
-        
-        cmd = ['tmuxinator', 'start', self._tmuxinator_project, ('--attach' if attach else '--no-attach')]
-        
-        # Start tmux session, exit this program, but attach to tmux session if requested
-        process = subprocess.run(cmd)
+        first_window = session_spec["windows"][0]
+        first_pane = first_window["panes"][0]
+        subprocess.run(
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                session_name,
+                "-n",
+                first_window["name"],
+                "bash",
+                "-lc",
+                first_pane["command"],
+            ],
+            check=True,
+        )
+        self._set_pane_title(session_name, first_window["name"], 0, first_pane["title"])
+        self._populate_window(session_name, first_window)
 
-        if not attach:
-            if process.returncode != 0:
-                print('Failed to boot system.')
-                
-                return False
-            
-            print('System booted. Use "iii system start" to start the system.')
-            
-            return True
-            
+        for window in session_spec["windows"][1:]:
+            subprocess.run(
+                [
+                    "tmux",
+                    "new-window",
+                    "-t",
+                    session_name,
+                    "-n",
+                    window["name"],
+                    "bash",
+                    "-lc",
+                    window["panes"][0]["command"],
+                ],
+                check=True,
+            )
+            self._set_pane_title(session_name, window["name"], 0, window["panes"][0]["title"])
+            self._populate_window(session_name, window)
+
+        subprocess.run(
+            ["tmux", "select-window", "-t", f"{session_name}:{session_spec['startup_window']}"],
+            check=True,
+        )
+
+        if attach:
+            return self.attach(session_name)
+
+        print('System booted. Use "iii system start" to start the system.')
         return True
 
-    def attach(self):
-        if self._tmuxinator_project is None:
-            print('TMUXINATOR_PROJECT environment variable not set. Cannot attach to tmux session.')
-            return False
-        
-        if self._tmux_session_running:
-            cmd = ['tmux', 'attach', '-t', self._tmuxinator_project]
-            
-            subprocess.run(cmd)
-            
-            return True
-            
-        else:
+    def _populate_window(self, session_name: str, window: dict) -> None:
+        for index, pane in enumerate(window["panes"][1:], start=1):
+            subprocess.run(
+                [
+                    "tmux",
+                    "split-window",
+                    "-t",
+                    f"{session_name}:{window['name']}",
+                    "bash",
+                    "-lc",
+                    pane["command"],
+                ],
+                check=True,
+            )
+            self._set_pane_title(session_name, window["name"], index, pane["title"])
+        subprocess.run(
+            ["tmux", "select-layout", "-t", f"{session_name}:{window['name']}", window["layout"]],
+            check=True,
+        )
+
+    def _set_pane_title(self, session_name: str, window_name: str, pane_index: int, title: str) -> None:
+        subprocess.run(
+            [
+                "tmux",
+                "select-pane",
+                "-t",
+                f"{session_name}:{window_name}.{pane_index}",
+                "-T",
+                title,
+            ],
+            check=True,
+        )
+
+    def attach(self, session_name: str) -> bool:
+        if not self.session_running(session_name):
             print('Session not running. Use "iii system boot --attach" to start the system and attach to the tmux session.')
-            
             return False
-        
-    def kill_session(self):
-        if self._tmuxinator_project is None:
+        subprocess.run(["tmux", "attach", "-t", session_name], check=False)
+        return True
+
+    def kill_session(self, session_name: str) -> bool:
+        if not self.session_running(session_name):
+            print("Tmux session not running.")
             return False
-        
-        process = subprocess.Popen(['tmuxinator', 'stop', self._tmuxinator_project], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        process.wait()
-        
-        if process.returncode != 0:
-            print('Failed to kill tmux session.')
-            return False
-        
-        print('Tmux session killed.')
-        
+        subprocess.run(["tmux", "kill-session", "-t", session_name], check=True)
+        print("Tmux session killed.")
         return True
