@@ -16,6 +16,8 @@ def test_tmux_handler_start_materializes_session_commands(monkeypatch):
     handler = TmuxHandler()
     monkeypatch.setattr(handler, "_list_sessions", lambda: set())
     monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setenv("CLI_CONFIGURATION", "dev")
+    monkeypatch.setenv("III_SYSTEM_PROFILE", "sim")
 
     session_spec = {
         "session_name": "iii_sim",
@@ -33,7 +35,11 @@ def test_tmux_handler_start_materializes_session_commands(monkeypatch):
     }
 
     assert handler.start(session_spec, attach=False)
-    assert commands[0][:4] == ["tmux", "new-session", "-d", "-s"]
+    assert commands[0][:3] == ["tmux", "new-session", "-d"]
+    assert "-s" in commands[0]
+    assert "CLI_CONFIGURATION=dev" in commands[0]
+    assert "III_SYSTEM_PROFILE=sim" in commands[0]
+    assert any("[tmux pane command exited with status %s]" in part for part in commands[0])
     assert any(command[:2] == ["tmux", "split-window"] for command in commands)
 
 
