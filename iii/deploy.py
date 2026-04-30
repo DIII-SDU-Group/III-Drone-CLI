@@ -275,35 +275,6 @@ def install_udev_rules(args):
         
     exit(0)
     
-def install_tmuxinator_configuration(args):
-    if CLI_CONFIGURATION not in ['remote', 'dev']:
-        print('Cannot only deploy in remote or dev configuration')
-        exit(1)
-        
-    III_DRONE_DEPLOYMENT_DIR_NAME = os.getenv('III_DRONE_DEPLOYMENT_DIR_NAME')
-    
-    if III_DRONE_DEPLOYMENT_DIR_NAME is None:
-        print('III_DRONE_DEPLOYMENT_DIR_NAME environment variable is not set. Has the setup_remote.bash script been sourced?')
-        exit(1)
-        
-    ssh_manager = SSHManager()
-    
-    print("Installing tmuxinator configuration on host...")
-    
-    system_install_success, con_success = ssh_manager.execute(
-        f"~/{III_DRONE_DEPLOYMENT_DIR_NAME}/scripts/install_tmuxinator_configuration.sh",
-    )
-    
-    if not con_success:
-        print('Could not connect to host. Is the host alive?')
-        exit(1)
-        
-    if not system_install_success:
-        print('Could not install tmuxinator configuration on host: Unknown error')
-        exit(1)
-        
-    exit(0)
-    
 def install_configuration(args):
     if CLI_CONFIGURATION not in ['remote', 'dev']:
         print('Cannot only deploy in remote or dev configuration')
@@ -382,7 +353,6 @@ def install_all(args):
         "tools",
         "cli",
         "udev_rules",
-        "tmuxinator_configuration",
         "configuration",
         "environment",
     ]
@@ -439,10 +409,6 @@ def install(args):
         
     if args.udev_rules or args.all:
         install_udev_rules(args)
-        has_target = True
-        
-    if args.tmuxinator_configuration or args.all:
-        install_tmuxinator_configuration(args)
         has_target = True
         
     if args.configuration or args.all:
@@ -685,7 +651,6 @@ def initialize(parser):
     parser_install.add_argument('--tools', action='store_true', help='Installs tools on the host')
     parser_install.add_argument('--cli', action='store_true', help='Installs the CLI on the host')
     parser_install.add_argument('--udev-rules', action='store_true', help='Installs udev rules on the host')
-    parser_install.add_argument('--tmuxinator-configuration', action='store_true', help='Installs tmuxinator configuration on the host')
     parser_install.add_argument('--configuration', action='store_true', help='Installs configuration on the host')
     parser_install.add_argument('--environment', action='store_true', help='Installs environment on the host')
     parser_install.add_argument('--all', action='store_true', help='Installs all targets on host.')
