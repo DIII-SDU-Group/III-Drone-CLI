@@ -129,13 +129,136 @@ def test_shutdown_treats_not_booted_daemon_as_success(monkeypatch, capsys):
             raise RuntimeError("System is not booted.")
 
     monkeypatch.setattr(system, "_local_client", lambda: _Client())
-    args = SimpleNamespace(select_nodes=[], include_dependencies=False, kill_session=False)
+    args = SimpleNamespace(select_nodes=[], include_dependencies=False, keep_session=True)
 
     with pytest.raises(SystemExit) as exc_info:
         system.shutdown(args)
 
     assert exc_info.value.code == 0
     assert "not booted" in capsys.readouterr().out
+
+
+def test_start_reports_not_booted_without_traceback(monkeypatch, capsys):
+    monkeypatch.setenv("CLI_CONFIGURATION", "dev")
+    system = importlib.import_module("iii.system")
+
+    class _Client:
+        def ping(self):
+            return True
+
+        def start(self, **kwargs):
+            del kwargs
+            raise RuntimeError("System is not booted.")
+
+    monkeypatch.setattr(system, "_local_client", lambda: _Client())
+    args = SimpleNamespace(select_nodes=[], include_dependencies=False, skip_activate=False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        system.start(args)
+
+    assert exc_info.value.code == 1
+    assert 'Use "iii system boot" first' in capsys.readouterr().out
+
+
+def test_shutdown_kills_tmux_session_by_default(monkeypatch):
+    monkeypatch.setenv("CLI_CONFIGURATION", "dev")
+    system = importlib.import_module("iii.system")
+
+    class _Client:
+        def ping(self):
+            return True
+
+        def shutdown(self, **kwargs):
+            del kwargs
+            return {"success": True}
+
+    killed_sessions = []
+
+    class _Tmux:
+        def kill_session(self, session_name):
+            killed_sessions.append(session_name)
+            return True
+
+    monkeypatch.setattr(system, "_local_client", lambda: _Client())
+    monkeypatch.setattr(system, "TmuxHandler", _Tmux)
+    args = SimpleNamespace(select_nodes=[], include_dependencies=False, keep_session=False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        system.shutdown(args)
+
+    assert exc_info.value.code == 0
+    assert killed_sessions == ["iii_sim"]
+
+
+def test_shutdown_keeps_tmux_session_when_requested(monkeypatch):
+    monkeypatch.setenv("CLI_CONFIGURATION", "dev")
+    system = importlib.import_module("iii.system")
+
+    class _Client:
+        def ping(self):
+            return True
+
+        def shutdown(self, **kwargs):
+            del kwargs
+            return {"success": True}
+
+    class _Tmux:
+        def kill_session(self, session_name):
+            raise AssertionError(f"unexpected kill: {session_name}")
+
+    monkeypatch.setattr(system, "_local_client", lambda: _Client())
+    monkeypatch.setattr(system, "TmuxHandler", _Tmux)
+    args = SimpleNamespace(select_nodes=[], include_dependencies=False, keep_session=True)
+
+    with pytest.raises(SystemExit) as exc_info:
+        system.shutdown(args)
+
+    assert exc_info.value.code == 0
+
+
+def test_boot_replaces_stale_tmux_session_when_daemon_was_rebooted(monkeypatch):
+    monkeypatch.setenv("CLI_CONFIGURATION", "dev")
+    system = importlib.import_module("iii.system")
+
+    class _Client:
+        def boot(self, profile):
+            assert profile == "sim"
+            return {
+                "booted": False,
+                "tmux": {
+                    "session_name": "iii_sim",
+                    "startup_window": "system",
+                    "windows": [],
+                },
+            }
+
+    events = []
+
+    class _Tmux:
+        def __init__(self):
+            self._running = True
+
+        def session_running(self, session_name):
+            assert session_name == "iii_sim"
+            return self._running
+
+        def kill_session(self, session_name):
+            events.append(("kill", session_name))
+            self._running = False
+            return True
+
+        def start(self, session_spec, attach=False):
+            events.append(("start", session_spec["session_name"], attach))
+            return True
+
+    monkeypatch.setattr(system, "_ensure_local_daemon", lambda: _Client())
+    monkeypatch.setattr(system, "TmuxHandler", _Tmux)
+
+    with pytest.raises(SystemExit) as exc_info:
+        system.boot(SimpleNamespace(attach=False))
+
+    assert exc_info.value.code == 0
+    assert events == [("kill", "iii_sim"), ("start", "iii_sim", False)]
 
 
 def test_daemon_restart_wraps_systemctl(monkeypatch):

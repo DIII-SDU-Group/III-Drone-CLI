@@ -217,11 +217,17 @@ def start(args):
         exit(1)
     target = "configured" if args.skip_activate else "active"
     print(f"Starting system: target={target}, scope={_scope_text(args.select_nodes, args.include_dependencies)} ...", flush=True)
-    result = client.start(
-        activate=not args.skip_activate,
-        select_nodes=args.select_nodes,
-        include_dependencies=args.include_dependencies,
-    )
+    try:
+        result = client.start(
+            activate=not args.skip_activate,
+            select_nodes=args.select_nodes,
+            include_dependencies=args.include_dependencies,
+        )
+    except RuntimeError as exc:
+        if str(exc) == "System is not booted.":
+            print('System is not booted. Use "iii system boot" first.')
+            exit(1)
+        raise
     _print_result_summary(result, operation="start")
     if not result["success"] and result.get("error"):
         print(result["error"])
@@ -348,7 +354,7 @@ def shutdown(args):
             "/home/iii/.local/bin/iii system shutdown",
             _filter_args(
                 [
-                    "--kill-session" if args.kill_session else "",
+                    "--keep-session" if args.keep_session else "",
                     "--include-dependencies" if args.include_dependencies else "",
                     "--select-nodes" if args.select_nodes else "",
                     *args.select_nodes,
@@ -376,7 +382,12 @@ def shutdown(args):
         print(result["error"])
     elif result["success"] and not result.get("message"):
         print("System runtime shutdown complete.")
-    if args.kill_session:
+    should_kill_session = (
+        result["success"]
+        and not args.keep_session
+        and not args.select_nodes
+    )
+    if should_kill_session:
         TmuxHandler().kill_session(_session_name())
     exit(0 if result["success"] else 1)
 
@@ -393,14 +404,19 @@ def boot(args):
     response = client.boot(_profile_name())
     tmux_handler = TmuxHandler()
     session_spec = response["tmux"]
+    session_running = tmux_handler.session_running(session_spec["session_name"])
+    if response.get("booted") and session_running and args.attach:
+        success = tmux_handler.attach(session_spec["session_name"])
+        exit(0 if success else 1)
+    if response.get("booted") and session_running:
+        print('System already booted. Use "iii system attach" to attach to the tmux session.')
+        exit(0)
+    if session_running:
+        tmux_handler.kill_session(session_spec["session_name"])
     if not tmux_handler.session_running(session_spec["session_name"]):
         success = tmux_handler.start(session_spec, attach=args.attach)
         exit(0 if success else 1)
-    if args.attach:
-        success = tmux_handler.attach(session_spec["session_name"])
-        exit(0 if success else 1)
-    print('System already booted. Use "iii system attach" to attach to the tmux session.')
-    exit(0)
+    exit(1)
 
 
 def attach(args):
@@ -608,9 +624,9 @@ def initialize(parser):
     shutdown_parser = subparsers.add_parser("shutdown", help="Shuts down the system runtime")
     shutdown_parser.set_defaults(func=shutdown)
     shutdown_parser.add_argument(
-        "--kill-session",
+        "--keep-session",
         action="store_true",
-        help="Kill the tmux session after shutting down the system.",
+        help="Keep the tmux session after shutting down the full system runtime.",
     )
     shutdown_parser.add_argument(
         "--select-nodes",
