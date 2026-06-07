@@ -280,7 +280,10 @@ def test_daemon_restart_wraps_systemctl(monkeypatch):
         system.daemon(args)
 
     assert exc_info.value.code == 0
-    assert calls == [["sudo", "-n", "systemctl", "restart", "test-daemon.service"]]
+    expected_command = ["systemctl", "restart", "test-daemon.service"]
+    if os.geteuid() != 0:
+        expected_command = ["sudo", "-n", *expected_command]
+    assert calls == [expected_command]
 
 
 def test_daemon_logs_wraps_journalctl(monkeypatch):

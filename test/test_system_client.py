@@ -26,11 +26,12 @@ def test_daemon_client_request_round_trip(tmp_path, monkeypatch):
     try:
         client = DaemonClient()
         result = client._request({"command": "status"})
-        assert result["echo"] == {"command": "status"}
+        assert result["echo"] == {"command": "status", "daemon_timeout_sec": client.request_timeout_sec}
         assert client.ping()
         assert client.service_start("micro_ros_agent")["echo"] == {
             "command": "service_start",
             "service_id": "micro_ros_agent",
+            "daemon_timeout_sec": client.request_timeout_sec,
         }
     finally:
         server.shutdown()
