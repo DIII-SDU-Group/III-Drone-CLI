@@ -705,27 +705,30 @@ def kill_session(args):
 
 
 def logs(args):
+    follow = getattr(args, "follow", False)
+    history = getattr(args, "history", False)
+    lines = getattr(args, "lines", 200)
     if CLI_CONFIGURATION == "host":
         success = _host_forward(
             f"/home/iii/.local/bin/iii system logs {args.entity_id}",
             _filter_args([
-                "--follow" if args.follow else "",
-                "--history" if args.history else "",
+                "--follow" if follow else "",
+                "--history" if history else "",
                 "--lines",
-                str(args.lines),
+                str(lines),
             ]),
         )
         exit(0 if success else 1)
     if CLI_CONFIGURATION == "remote":
         seen = 0
         while True:
-            response = _remote_log_tail(args.entity_id, lines=args.lines)
+            response = _remote_log_tail(args.entity_id, lines=lines)
             rows = response.get("lines", [])
             new_rows = rows[seen:] if seen <= len(rows) else rows
             for row in new_rows:
                 print(f"[{row.get('source_id', args.entity_id)}] {row.get('line', '')}")
             seen = len(rows)
-            if not args.follow:
+            if not follow:
                 exit(0)
             time.sleep(1.0)
 
@@ -734,12 +737,12 @@ def logs(args):
         print("System daemon not running.")
         exit(1)
     if args.entity_id == "daemon":
-        exit(_tail_file(client.daemon_log, args.follow, lines=args.lines))
+        exit(_tail_file(client.daemon_log, follow, lines=lines))
     exit(_tail_latest_log(
         client.log_dir(args.entity_id),
-        args.follow,
-        history=args.history,
-        lines=args.lines,
+        follow,
+        history=history,
+        lines=lines,
     ))
 
 
