@@ -18,11 +18,26 @@ if CLI_CONFIGURATION not in ["host", "container", "remote", "dev"]:
     print('Invalid configuration. Please set CLI_CONFIGURATION to "host", "container", "remote", or "dev"')
     exit(1)
 
-if CLI_CONFIGURATION in ["host", "remote"]:
+if CLI_CONFIGURATION == "host":
     from .container_manager import ContainerManager
+elif CLI_CONFIGURATION == "remote":
+    from .runtime_api_client import RuntimeApiClient, RuntimeApiError
 else:
     from .system_client import DaemonClient
     from .tmux_handler import TmuxHandler
+
+
+RUNTIME_BOOT = "runtime.boot"
+RUNTIME_START = "runtime.start"
+RUNTIME_STOP = "runtime.stop"
+RUNTIME_RESTART = "runtime.restart"
+RUNTIME_SHUTDOWN = "runtime.shutdown"
+RUNTIME_STATUS = "runtime.status"
+RUNTIME_LIST_ENTITIES = "runtime.list_entities"
+RUNTIME_LIST_SERVICES = "runtime.list_services"
+RUNTIME_SERVICE_START = "runtime.service.start"
+RUNTIME_SERVICE_STOP = "runtime.service.stop"
+RUNTIME_SERVICE_RESTART = "runtime.service.restart"
 
 
 def _profile_name() -> str:
@@ -40,6 +55,50 @@ def _local_client() -> "DaemonClient":
 def _host_forward(command: str, args: list[str]) -> bool:
     container_manager = ContainerManager()
     return container_manager.execute_cli(command, args)
+
+
+def _remote_runtime_client() -> "RuntimeApiClient":
+    return RuntimeApiClient.from_env()
+
+
+def _remote_command(command_id: str, parameters: dict | None = None) -> dict:
+    try:
+        return _remote_runtime_client().command(command_id, parameters or {})
+    except RuntimeApiError as exc:
+        print(f"Runtime API error: {exc}")
+        exit(1)
+
+
+def _remote_log_tail(source_id: str, *, lines: int = 200) -> dict:
+    try:
+        return _remote_runtime_client().log_tail(source_id, lines=lines)
+    except RuntimeApiError as exc:
+        print(f"Runtime API error: {exc}")
+        exit(1)
+
+
+def _remote_daemon_result(response: dict) -> dict:
+    result = response.get("result") or {}
+    daemon = result.get("daemon")
+    return daemon if isinstance(daemon, dict) else result
+
+
+def _print_remote_rejection(response: dict) -> None:
+    rejection = response.get("rejection") or {}
+    message = rejection.get("message") or response.get("message") or "Remote runtime command rejected."
+    print(message)
+
+
+def _exit_remote_response(response: dict, *, operation: str | None = None, success_message: str | None = None) -> None:
+    if not response.get("accepted"):
+        _print_remote_rejection(response)
+        exit(1)
+    daemon_result = _remote_daemon_result(response)
+    if operation is not None:
+        _print_result_summary(daemon_result, operation=operation)
+    if success_message:
+        print(success_message)
+    exit(0)
 
 
 def _filter_args(parts: list[str]) -> list[str]:
@@ -98,12 +157,12 @@ def _select_log_file(log_dir: str, *, history: bool) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime_ns)
 
 
-def _tail_latest_log(log_dir: str, follow: bool, history: bool = False) -> int:
+def _tail_latest_log(log_dir: str, follow: bool, history: bool = False, lines: int = 200) -> int:
     directory = Path(log_dir)
     while True:
         target = _select_log_file(str(directory), history=history)
         if target is not None:
-            return _tail_file(target, follow)
+            return _tail_file(target, follow, lines=lines)
         if not follow:
             print(f"No log files found in {directory}")
             return 1
@@ -111,9 +170,9 @@ def _tail_latest_log(log_dir: str, follow: bool, history: bool = False) -> int:
         time.sleep(1.0)
 
 
-def _tail_file(path: str | Path, follow: bool) -> int:
+def _tail_file(path: str | Path, follow: bool, lines: int = 200) -> int:
     target = str(path)
-    cmd = ["tail", "-f", target] if follow else ["tail", "-n", "200", target]
+    cmd = ["tail", "-f", target] if follow else ["tail", "-n", str(max(1, lines)), target]
     return subprocess.run(cmd, check=False).returncode
 
 
@@ -141,7 +200,10 @@ def _print_managed_summary(result: dict, *, operation: str) -> None:
     grouped: dict[str, list[str]] = {}
     for managed_node in managed_nodes:
         label = labels.get(managed_node.get("transition"), managed_node.get("transition", "changed"))
-        grouped.setdefault(label, []).append(managed_node.get("key", "<unknown>"))
+        grouped.setdefault(label, [])
+        node_id = managed_node.get("key", "<unknown>")
+        if node_id not in grouped[label]:
+            grouped[label].append(node_id)
 
     print("Managed nodes:")
     for label, node_ids in sorted(grouped.items()):
@@ -196,8 +258,27 @@ def _print_result_summary(result: dict, *, operation: str) -> None:
     _print_blocked_summary(result.get("blocked_nodes"))
 
 
+def _print_status_result(result: dict) -> None:
+    print(f"Booted: {result['booted']}")
+    print(f"Profile: {result.get('profile')}")
+    print("\nManaged nodes:")
+    for key, state in sorted(result["managed_nodes"].items()):
+        print(f"  {key}: {state}")
+    print("\nServices:")
+    for key, state in sorted(result.get("services", {}).items()):
+        alive = "alive" if state["alive"] else "dead"
+        ready = "ready" if state["ready"] else "waiting"
+        print(f"  {key}: {alive}, {ready} (starts={state['starts']}, exits={state['exits']})")
+        if not state["ready"]:
+            print(f"    {state['reason']}")
+    print("\nProcesses:")
+    for key, state in sorted(result["processes"].items()):
+        alive = "alive" if state["alive"] else "dead"
+        print(f"  {key}: {alive} (starts={state['start_count']}, exits={state['exit_count']})")
+
+
 def start(args):
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system start",
             _filter_args(
@@ -210,6 +291,16 @@ def start(args):
             ),
         )
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        response = _remote_command(
+            RUNTIME_START,
+            {
+                "activate": not args.skip_activate,
+                "select_nodes": args.select_nodes,
+                "include_dependencies": args.include_dependencies,
+            },
+        )
+        _exit_remote_response(response, operation="start", success_message="System start complete.")
 
     client = _local_client()
     if not client.ping():
@@ -217,11 +308,17 @@ def start(args):
         exit(1)
     target = "configured" if args.skip_activate else "active"
     print(f"Starting system: target={target}, scope={_scope_text(args.select_nodes, args.include_dependencies)} ...", flush=True)
-    result = client.start(
-        activate=not args.skip_activate,
-        select_nodes=args.select_nodes,
-        include_dependencies=args.include_dependencies,
-    )
+    try:
+        result = client.start(
+            activate=not args.skip_activate,
+            select_nodes=args.select_nodes,
+            include_dependencies=args.include_dependencies,
+        )
+    except RuntimeError as exc:
+        if str(exc) == "System is not booted.":
+            print('System is not booted. Use "iii system boot" first.')
+            exit(1)
+        raise
     _print_result_summary(result, operation="start")
     if not result["success"] and result.get("error"):
         print(result["error"])
@@ -233,7 +330,7 @@ def start(args):
 
 
 def stop(args):
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system stop",
             _filter_args(
@@ -246,6 +343,16 @@ def stop(args):
             ),
         )
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        response = _remote_command(
+            RUNTIME_STOP,
+            {
+                "cleanup": not args.skip_cleanup,
+                "select_nodes": args.select_nodes,
+                "include_dependencies": args.include_dependencies,
+            },
+        )
+        _exit_remote_response(response, operation="stop", success_message="System stop complete.")
 
     client = _local_client()
     if not client.ping():
@@ -267,7 +374,7 @@ def stop(args):
 
 
 def restart(args):
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system restart",
             _filter_args(
@@ -280,6 +387,16 @@ def restart(args):
             ),
         )
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        response = _remote_command(
+            RUNTIME_RESTART,
+            {
+                "cold": args.cold,
+                "select_nodes": args.select_nodes,
+                "include_dependencies": args.include_dependencies,
+            },
+        )
+        _exit_remote_response(response, operation="restart", success_message="System restart complete.")
 
     client = _local_client()
     if not client.ping():
@@ -306,12 +423,23 @@ def restart(args):
 
 
 def status(args):
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system status",
             _filter_args(["--watch" if args.watch else ""]),
         )
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        while True:
+            response = _remote_command(RUNTIME_STATUS)
+            if not response.get("accepted"):
+                _print_remote_rejection(response)
+                exit(1)
+            _print_status_result(_remote_daemon_result(response))
+            if not args.watch:
+                exit(0)
+            time.sleep(1.0)
+            print("\033[2J\033[H", end="")
 
     client = _local_client()
     if not client.ping():
@@ -320,22 +448,7 @@ def status(args):
 
     while True:
         result = client.status()
-        print(f"Booted: {result['booted']}")
-        print(f"Profile: {result.get('profile')}")
-        print("\nManaged nodes:")
-        for key, state in sorted(result["managed_nodes"].items()):
-            print(f"  {key}: {state}")
-        print("\nServices:")
-        for key, state in sorted(result.get("services", {}).items()):
-            alive = "alive" if state["alive"] else "dead"
-            ready = "ready" if state["ready"] else "waiting"
-            print(f"  {key}: {alive}, {ready} (starts={state['starts']}, exits={state['exits']})")
-            if not state["ready"]:
-                print(f"    {state['reason']}")
-        print("\nProcesses:")
-        for key, state in sorted(result["processes"].items()):
-            alive = "alive" if state["alive"] else "dead"
-            print(f"  {key}: {alive} (starts={state['start_count']}, exits={state['exit_count']})")
+        _print_status_result(result)
         if not args.watch:
             exit(0)
         time.sleep(1.0)
@@ -343,12 +456,12 @@ def status(args):
 
 
 def shutdown(args):
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system shutdown",
             _filter_args(
                 [
-                    "--kill-session" if args.kill_session else "",
+                    "--keep-session" if args.keep_session else "",
                     "--include-dependencies" if args.include_dependencies else "",
                     "--select-nodes" if args.select_nodes else "",
                     *args.select_nodes,
@@ -356,6 +469,15 @@ def shutdown(args):
             ),
         )
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        response = _remote_command(
+            RUNTIME_SHUTDOWN,
+            {
+                "select_nodes": args.select_nodes,
+                "include_dependencies": args.include_dependencies,
+            },
+        )
+        _exit_remote_response(response, success_message="System runtime shutdown complete.")
 
     client = _local_client()
     if not client.ping():
@@ -376,38 +498,57 @@ def shutdown(args):
         print(result["error"])
     elif result["success"] and not result.get("message"):
         print("System runtime shutdown complete.")
-    if args.kill_session:
+    should_kill_session = (
+        result["success"]
+        and not args.keep_session
+        and not args.select_nodes
+    )
+    if should_kill_session:
         TmuxHandler().kill_session(_session_name())
     exit(0 if result["success"] else 1)
 
 
 def boot(args):
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system boot",
             _filter_args(["--attach" if args.attach else ""]),
         )
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        response = _remote_command(RUNTIME_BOOT, {"profile": _profile_name()})
+        message = "System boot request accepted."
+        if args.attach:
+            message += " Use an explicit SSH workflow to attach to the remote tmux session."
+        _exit_remote_response(response, success_message=message)
 
     client = _ensure_local_daemon()
     response = client.boot(_profile_name())
     tmux_handler = TmuxHandler()
     session_spec = response["tmux"]
+    session_running = tmux_handler.session_running(session_spec["session_name"])
+    if response.get("booted") and session_running and args.attach:
+        success = tmux_handler.attach(session_spec["session_name"])
+        exit(0 if success else 1)
+    if response.get("booted") and session_running:
+        print('System already booted. Use "iii system attach" to attach to the tmux session.')
+        exit(0)
+    if session_running:
+        tmux_handler.kill_session(session_spec["session_name"])
     if not tmux_handler.session_running(session_spec["session_name"]):
         success = tmux_handler.start(session_spec, attach=args.attach)
         exit(0 if success else 1)
-    if args.attach:
-        success = tmux_handler.attach(session_spec["session_name"])
-        exit(0 if success else 1)
-    print('System already booted. Use "iii system attach" to attach to the tmux session.')
-    exit(0)
+    exit(1)
 
 
 def attach(args):
     del args
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         success = _host_forward("/home/iii/.local/bin/iii system attach", [])
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        print("Remote tmux attach is no longer forwarded through runtime-control commands. Use an explicit SSH workflow.")
+        exit(1)
 
     success = TmuxHandler().attach(_session_name())
     exit(0 if success else 1)
@@ -415,9 +556,17 @@ def attach(args):
 
 def list_nodes(args):
     del args
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         success = _host_forward("/home/iii/.local/bin/iii system list-nodes", [])
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        response = _remote_command(RUNTIME_LIST_ENTITIES)
+        if not response.get("accepted"):
+            _print_remote_rejection(response)
+            exit(1)
+        for node in _remote_daemon_result(response).get("managed_nodes", []):
+            print(node)
+        exit(0)
 
     client = _local_client()
     if not client.ping():
@@ -430,9 +579,17 @@ def list_nodes(args):
 
 def list_services(args):
     del args
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         success = _host_forward("/home/iii/.local/bin/iii system list-services", [])
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        response = _remote_command(RUNTIME_LIST_SERVICES)
+        if not response.get("accepted"):
+            _print_remote_rejection(response)
+            exit(1)
+        for service_id in _remote_daemon_result(response).get("services", []):
+            print(service_id)
+        exit(0)
 
     client = _local_client()
     if not client.ping():
@@ -444,12 +601,33 @@ def list_services(args):
 
 
 def service(args):
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         forwarded_args = [args.service_action]
         if getattr(args, "service_id", None):
             forwarded_args.append(args.service_id)
         success = _host_forward("/home/iii/.local/bin/iii system service", forwarded_args)
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        if args.service_action == "list":
+            list_services(args)
+        command_id = {
+            "start": RUNTIME_SERVICE_START,
+            "stop": RUNTIME_SERVICE_STOP,
+            "restart": RUNTIME_SERVICE_RESTART,
+        }[args.service_action]
+        response = _remote_command(command_id, {"service_id": args.service_id})
+        if not response.get("accepted"):
+            _print_remote_rejection(response)
+            exit(1)
+        result = _remote_daemon_result(response)
+        alive = "alive" if result.get("alive") else "dead"
+        ready = "ready" if result.get("ready") else "waiting"
+        print(f"{args.service_id}: {alive}, {ready}")
+        if result.get("reason"):
+            print(result["reason"])
+        if result.get("error"):
+            print(result["error"])
+        exit(0 if result.get("success", False) else 1)
 
     client = _local_client()
     if not client.ping():
@@ -486,12 +664,15 @@ def service(args):
 def daemon(args):
     service_name = _systemd_service_name()
 
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         forwarded_args = [args.daemon_action]
         if getattr(args, "follow", False):
             forwarded_args.append("--follow")
         success = _host_forward("/home/iii/.local/bin/iii system daemon", forwarded_args)
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        print("Remote daemon systemd control is not forwarded over SSH. Use the runtime API service locally or an explicit SSH workflow.")
+        exit(1)
 
     if args.daemon_action in {"start", "stop", "restart", "status"}:
         result = subprocess.run(
@@ -512,29 +693,57 @@ def daemon(args):
 
 def kill_session(args):
     del args
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    if CLI_CONFIGURATION == "host":
         success = _host_forward("/home/iii/.local/bin/iii system kill-session", [])
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        print("Remote tmux session control is not forwarded through runtime-control commands. Use an explicit SSH workflow.")
+        exit(1)
 
     success = TmuxHandler().kill_session(_session_name())
     exit(0 if success else 1)
 
 
 def logs(args):
-    if CLI_CONFIGURATION in ["host", "remote"]:
+    follow = getattr(args, "follow", False)
+    history = getattr(args, "history", False)
+    lines = getattr(args, "lines", 200)
+    if CLI_CONFIGURATION == "host":
         success = _host_forward(
             f"/home/iii/.local/bin/iii system logs {args.entity_id}",
-            _filter_args(["--follow" if args.follow else "", "--history" if args.history else ""]),
+            _filter_args([
+                "--follow" if follow else "",
+                "--history" if history else "",
+                "--lines",
+                str(lines),
+            ]),
         )
         exit(0 if success else 1)
+    if CLI_CONFIGURATION == "remote":
+        seen = 0
+        while True:
+            response = _remote_log_tail(args.entity_id, lines=lines)
+            rows = response.get("lines", [])
+            new_rows = rows[seen:] if seen <= len(rows) else rows
+            for row in new_rows:
+                print(f"[{row.get('source_id', args.entity_id)}] {row.get('line', '')}")
+            seen = len(rows)
+            if not follow:
+                exit(0)
+            time.sleep(1.0)
 
     client = _local_client()
     if not client.ping():
         print("System daemon not running.")
         exit(1)
     if args.entity_id == "daemon":
-        exit(_tail_file(client.daemon_log, args.follow))
-    exit(_tail_latest_log(client.log_dir(args.entity_id), args.follow, history=args.history))
+        exit(_tail_file(client.daemon_log, follow, lines=lines))
+    exit(_tail_latest_log(
+        client.log_dir(args.entity_id),
+        follow,
+        history=history,
+        lines=lines,
+    ))
 
 
 def initialize(parser):
@@ -608,9 +817,9 @@ def initialize(parser):
     shutdown_parser = subparsers.add_parser("shutdown", help="Shuts down the system runtime")
     shutdown_parser.set_defaults(func=shutdown)
     shutdown_parser.add_argument(
-        "--kill-session",
+        "--keep-session",
         action="store_true",
-        help="Kill the tmux session after shutting down the system.",
+        help="Keep the tmux session after shutting down the full system runtime.",
     )
     shutdown_parser.add_argument(
         "--select-nodes",
@@ -683,4 +892,10 @@ def initialize(parser):
         "--history",
         action="store_true",
         help="Show the accumulated process history instead of the current process run.",
+    )
+    logs_parser.add_argument(
+        "--lines",
+        type=int,
+        default=200,
+        help="Number of trailing log lines to print when not following.",
     )
