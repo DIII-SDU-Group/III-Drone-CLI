@@ -43,6 +43,26 @@ def content_id(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def validate_plan(value: Mapping[str, Any]) -> None:
+    if value.get("schema") != PLAN_SCHEMA:
+        raise OperationError("unsupported retained operation plan")
+    identifier = value.get("operation_id")
+    if not isinstance(identifier, str) or not OPERATION_ID.fullmatch(identifier):
+        raise OperationError("retained operation plan has an invalid operation ID")
+    plan_identity = value.get("plan_id")
+    unsigned = {key: item for key, item in value.items() if key != "plan_id"}
+    if not isinstance(plan_identity, str) or content_id(unsigned) != plan_identity:
+        raise OperationConflict("retained operation plan content identity mismatch")
+
+
+def validate_state(value: Mapping[str, Any]) -> None:
+    if value.get("schema") != OPERATION_SCHEMA:
+        raise OperationError("unsupported retained operation state")
+    identifier = value.get("operation_id")
+    if not isinstance(identifier, str) or not OPERATION_ID.fullmatch(identifier):
+        raise OperationError("retained operation state has an invalid operation ID")
+
+
 def default_state_root(environment: Mapping[str, str] | None = None) -> Path:
     env = os.environ if environment is None else environment
     explicit = env.get("III_OPERATION_STATE_DIR")
@@ -115,6 +135,8 @@ class OperationStore:
     def _read(self, path: Path) -> dict[str, Any] | None:
         if not path.exists():
             return None
+        if path.is_symlink():
+            raise OperationError(f"refusing symbolic-link operation data: {path.name}")
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -125,17 +147,22 @@ class OperationStore:
 
     def load_plan(self, identifier: str) -> dict[str, Any] | None:
         value = self._read(self.plan_path(identifier))
-        if value is not None and value.get("schema") != PLAN_SCHEMA:
-            raise OperationError("unsupported retained operation plan")
+        if value is not None:
+            validate_plan(value)
+            if value["operation_id"] != identifier:
+                raise OperationConflict("retained plan path and operation ID disagree")
         return value
 
     def load_state(self, identifier: str) -> dict[str, Any] | None:
         value = self._read(self.state_path(identifier))
-        if value is not None and value.get("schema") != OPERATION_SCHEMA:
-            raise OperationError("unsupported retained operation state")
+        if value is not None:
+            validate_state(value)
+            if value["operation_id"] != identifier:
+                raise OperationConflict("retained state path and operation ID disagree")
         return value
 
     def retain_plan(self, plan: Mapping[str, Any]) -> dict[str, Any]:
+        validate_plan(plan)
         identifier = str(plan["operation_id"])
         existing = self.load_plan(identifier)
         if existing is not None and existing.get("plan_id") != plan.get("plan_id"):
@@ -146,11 +173,14 @@ class OperationStore:
         if state is None:
             state = initial_state(plan)
             self.save_state(state)
+        elif state.get("plan_id") != plan.get("plan_id"):
+            raise OperationConflict("retained operation state is bound to a different plan")
         return state
 
     def save_state(self, state: Mapping[str, Any]) -> None:
         value = dict(state)
         value["updated_at"] = utc_now()
+        validate_state(value)
         self._atomic_write(self.state_path(str(value["operation_id"])), value)
 
     def transition(
@@ -177,7 +207,14 @@ class OperationStore:
         return state
 
     def _atomic_write(self, path: Path, value: Mapping[str, Any]) -> None:
+        if self.root.is_symlink():
+            raise OperationError("refusing symbolic-link operation-state directory")
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.root.is_symlink() or not self.root.is_dir():
+            raise OperationError("operation-state root must be a real directory")
+        if hasattr(os, "geteuid") and self.root.stat().st_uid != os.geteuid():
+            raise OperationError("operation-state root is not owned by the current user")
+        os.chmod(self.root, 0o700)
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         data = json.dumps(dict(value), sort_keys=True, separators=(",", ":")) + "\n"
         try:

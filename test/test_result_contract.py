@@ -9,7 +9,7 @@ import jsonschema
 import pytest
 
 from iii.__main__ import build_parser, main
-from iii.operation import OperationStore, create_plan
+from iii.operation import OperationError, OperationStore, create_plan
 from iii.result import CommandResult, Finding, NextAction, Outcome
 from iii.runner import (
     CommandSpec,
@@ -130,6 +130,8 @@ def test_help_and_parser_errors_share_result_and_next_action(argv, expected_code
     assert value["code"] == expected_code
     assert value["next_actions"]
     assert value["next_actions"][0]["command"][-1] == "--help"
+    if expected_code == "III_HELP":
+        assert value["next_actions"][0]["command"] != ["iii", *[item for item in argv if item not in {"--json", "--help"}], "--help"]
 
 
 def test_noninteractive_confirmation_refusal_never_calls_mutation(monkeypatch, tmp_path):
@@ -288,3 +290,38 @@ def test_operation_store_files_are_private_and_content_addressed(tmp_path):
     assert len(plan["plan_id"]) == 64
     assert store.plan_path("iii-storage-test").stat().st_mode & 0o777 == 0o600
     assert store.state_path("iii-storage-test").stat().st_mode & 0o777 == 0o600
+    assert tmp_path.stat().st_mode & 0o777 == 0o700
+
+
+def test_tampered_retained_plan_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLI_CONFIGURATION", "dev")
+    monkeypatch.setenv("III_OPERATION_STATE_DIR", str(tmp_path))
+    arguments = argparse.Namespace(func=lambda _args: None)
+    options = UniversalOptions(dry_run=True, operation_id="iii-tampered-plan")
+    result, _ = invoke(
+        args=arguments,
+        spec=CommandSpec(("system", "start"), mutating=True),
+        argv=["system", "start"],
+        options=options,
+    )
+    assert result.code == "III_OPERATION_PLAN_READY"
+    path = OperationStore(tmp_path).plan_path("iii-tampered-plan")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["argv"].append("--changed-after-review")
+    path.write_text(json.dumps(value), encoding="utf-8")
+    rejected, _ = invoke(
+        args=arguments,
+        spec=CommandSpec(("system", "start"), mutating=True),
+        argv=["system", "start"],
+        options=options,
+    )
+    assert rejected.code == "III_OPERATION_CONFLICT"
+    assert rejected.outcome is Outcome.REJECTED
+
+
+def test_symbolic_link_state_file_is_rejected(tmp_path):
+    target = tmp_path / "outside.json"
+    target.write_text("{}", encoding="utf-8")
+    (tmp_path / "iii-linked-state.json").symlink_to(target)
+    with pytest.raises(OperationError, match="symbolic-link"):
+        OperationStore(tmp_path).load_state("iii-linked-state")
