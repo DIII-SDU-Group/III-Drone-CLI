@@ -202,6 +202,7 @@ def parser_result(
 ) -> CommandResult:
     command = "iii" if not argv else "iii " + " ".join(argv)
     if error is None:
+        next_path = ("system",) if not path else tuple(path[:-1])
         return CommandResult(
             command=command,
             outcome=Outcome.SUCCESS,
@@ -209,7 +210,7 @@ def parser_result(
             code="III_HELP",
             payload_schema="iii.help/v1",
             payload={"help": help_text},
-            next_actions=(_help_action(path),),
+            next_actions=(_help_action(next_path),),
         )
     return CommandResult(
         command=command,
@@ -355,6 +356,8 @@ def _retained_plan(
         state = store.load_state(identifier)
         if state is None:
             state = store.retain_plan(existing)
+        elif state.get("plan_id") != existing.get("plan_id"):
+            raise OperationConflict("retained operation state is bound to a different plan")
         return existing, state
     plan = create_plan(
         identifier=identifier,
