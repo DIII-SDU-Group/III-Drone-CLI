@@ -12,6 +12,36 @@ The CLI package provides:
   runtime API remote-control client, tmux sessions, container helpers, and
   SSH-based deployment/administration
 
+## Universal Result And Operation Contract
+
+Every executable parser leaf is dispatched through one versioned
+`iii.command-result/v1` envelope. Human and JSON renderings use the same
+summary, findings, operation state, context, evidence, payload, and ordered
+`next_actions[]`; commands never need to parse terminal decoration to decide
+what happened.
+
+Universal controls may appear before or after the command path:
+
+```bash
+iii system status --output=json
+iii system start --dry-run --output=json
+iii system start --operation-id <id> --confirm --non-interactive --output=json
+iii system start --operation-id <id> --resume --confirm --non-interactive
+```
+
+Mutating commands retain an exact, content-addressed plan and atomic operation
+state under `III_OPERATION_STATE_DIR` or the platform state directory.
+`--dry-run` performs no mutation. Non-interactive mutation requires
+`--confirm`; any nested host/password prompt is rejected as
+`III_REQUIRED_INPUT`. Reusing an operation ID with different argv or context is
+rejected, while replaying an already completed operation is a no-op. Ctrl-C
+returns status 130, retains the checkpoint, and emits an exact reattach command.
+
+Structured stdout contains one JSON object only. Legacy handler output is
+captured into the envelope payload, including child-process stdout, while
+diagnostics use stderr. Help, parser errors, missing environment setup, and
+internal errors use the same result and next-action contract.
+
 ## Supported Modes
 
 The CLI behavior depends on `CLI_CONFIGURATION`:

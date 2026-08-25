@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iii-drone.invalid/schemas/command-result-v1.schema.json",
+  "title": "III universal command result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "command", "outcome", "exit_code", "summary", "code",
+    "findings", "operation", "context", "evidence", "payload_schema",
+    "payload", "next_actions", "terminal_reason"
+  ],
+  "properties": {
+    "schema": {"const": "iii.command-result/v1"},
+    "command": {"type": "string", "minLength": 1},
+    "outcome": {
+      "enum": ["success", "warning", "rejected", "failed", "partial", "interrupted", "cancelled", "usage_error", "internal_error"]
+    },
+    "exit_code": {"type": "integer"},
+    "summary": {"type": "string", "minLength": 1},
+    "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]+$"},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message", "severity", "field"],
+        "properties": {
+          "code": {"type": "string", "minLength": 1},
+          "message": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["info", "warning", "error"]},
+          "field": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "operation": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "state"],
+          "properties": {
+            "id": {"type": "string", "minLength": 8},
+            "state": {"type": ["string", "null"]}
+          }
+        }
+      ]
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "profile", "release_id"],
+      "properties": {
+        "target": {"type": ["string", "null"]},
+        "profile": {"type": ["string", "null"]},
+        "release_id": {"type": ["string", "null"]}
+      }
+    },
+    "evidence": {"type": "array", "items": {"type": "string"}},
+    "payload_schema": {"type": ["string", "null"]},
+    "payload": {"type": "object"},
+    "next_actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "shell_command", "reason", "mutating", "prerequisites", "confirmation_required", "context", "arguments"],
+        "properties": {
+          "command": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "shell_command": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1},
+          "mutating": {"type": "boolean"},
+          "prerequisites": {"type": "array", "items": {"type": "string"}},
+          "confirmation_required": {"type": "boolean"},
+          "context": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["target", "profile", "operation_id"],
+            "properties": {
+              "target": {"type": ["string", "null"]},
+              "profile": {"type": ["string", "null"]},
+              "operation_id": {"type": ["string", "null"]}
+            }
+          },
+          "arguments": {"type": "object"}
+        }
+      }
+    },
+    "terminal_reason": {"type": ["string", "null"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"next_actions": {"maxItems": 0}}},
+      "then": {"properties": {"terminal_reason": {"type": "string", "minLength": 1}}}
+    }
+  ]
+}

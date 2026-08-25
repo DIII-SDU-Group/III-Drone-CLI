@@ -10,14 +10,6 @@ import time
 
 CLI_CONFIGURATION = os.getenv("CLI_CONFIGURATION")
 
-if CLI_CONFIGURATION is None:
-    print("CLI_CONFIGURATION environment variable is not set. Have you sourced the setup scripts?")
-    exit(1)
-
-if CLI_CONFIGURATION not in ["host", "container", "remote", "dev"]:
-    print('Invalid configuration. Please set CLI_CONFIGURATION to "host", "container", "remote", or "dev"')
-    exit(1)
-
 if CLI_CONFIGURATION == "host":
     from .container_manager import ContainerManager
 elif CLI_CONFIGURATION == "remote":

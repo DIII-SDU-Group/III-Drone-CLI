@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iii-drone.invalid/schemas/operation-state-v1.schema.json",
+  "title": "III CLI operation state v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation_id", "plan_id", "state", "attempt", "updated_at", "exit_code", "result_code", "evidence"],
+  "properties": {
+    "schema": {"const": "iii.cli-operation-state/v1"},
+    "operation_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{7,63}$"},
+    "plan_id": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "state": {"enum": ["planned", "running", "completed", "warning", "rejected", "failed", "partial", "interrupted", "cancelled"]},
+    "attempt": {"type": "integer", "minimum": 0},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "exit_code": {"type": ["integer", "null"]},
+    "result_code": {"type": ["string", "null"]},
+    "evidence": {"type": "array", "items": {"type": "string"}}
+  }
+}
