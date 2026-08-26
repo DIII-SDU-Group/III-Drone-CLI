@@ -86,6 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     records.initialize(parser_records)
 
+    host = import_module("iii.host")
+    parser_host = subparsers.add_parser(
+        "host", help="Commands for provisioning and maintaining III hosts"
+    )
+    host.initialize(parser_host)
+
     inventory_parser(parser)
     return parser
 

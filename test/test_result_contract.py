@@ -226,6 +226,7 @@ def test_every_existing_parser_leaf_is_inventory_covered():
         "field",
         "logs",
         "records",
+        "host",
     }
     # Future providers must select from this declared universal contract surface.
     assert {
