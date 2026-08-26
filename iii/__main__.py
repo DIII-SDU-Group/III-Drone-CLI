@@ -52,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser_release = subparsers.add_parser("release", help="Commands for qualified releases")
     release.initialize(parser_release)
 
+    mission = import_module("iii.mission")
+    parser_mission = subparsers.add_parser("mission", help="Commands for installed mission catalogs")
+    mission.initialize(parser_mission)
+
     inventory_parser(parser)
     return parser
 

@@ -40,6 +40,12 @@ def _session_name() -> str:
     return f"iii_{_profile_name()}"
 
 
+def _sim_mission_catalog_preflight() -> dict[str, object]:
+    from .mission_preflight import ensure_sim_mission_catalog
+
+    return ensure_sim_mission_catalog()
+
+
 def _local_client() -> "DaemonClient":
     return DaemonClient()
 
@@ -517,6 +523,17 @@ def boot(args):
         if args.attach:
             message += " Use an explicit SSH workflow to attach to the remote tmux session."
         _exit_remote_response(response, success_message=message)
+
+    if _profile_name() == "sim":
+        from .mission_preflight import MissionPreflightError
+
+        try:
+            preflight = _sim_mission_catalog_preflight()
+        except MissionPreflightError as exc:
+            print(f"Mission catalog preflight failed: {exc}")
+            exit(1)
+        action = "rebuilt and verified" if preflight["rebuilt"] else "verified"
+        print(f"Mission catalog {action}: {preflight['catalog_hash']}")
 
     client = _ensure_local_daemon()
     response = client.boot(_profile_name())

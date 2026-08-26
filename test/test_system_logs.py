@@ -253,6 +253,11 @@ def test_boot_replaces_stale_tmux_session_when_daemon_was_rebooted(monkeypatch):
 
     monkeypatch.setattr(system, "_ensure_local_daemon", lambda: _Client())
     monkeypatch.setattr(system, "TmuxHandler", _Tmux)
+    monkeypatch.setattr(
+        system,
+        "_sim_mission_catalog_preflight",
+        lambda: {"rebuilt": False, "catalog_hash": "sha256:" + "a" * 64},
+    )
 
     with pytest.raises(SystemExit) as exc_info:
         system.boot(SimpleNamespace(attach=False))
