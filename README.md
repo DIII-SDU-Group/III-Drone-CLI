@@ -10,7 +10,7 @@ The CLI package provides:
 - subcommands for system control, configuration access, build flows, and deployment flows
 - thin environment-specific wrappers around daemon-backed system actions, the
   runtime API remote-control client, tmux sessions, container helpers, and
-  SSH-based deployment/administration
+  fixed key-only deployment transport
 
 ## Universal Result And Operation Contract
 
@@ -49,8 +49,8 @@ The CLI behavior depends on `CLI_CONFIGURATION`:
 - `host`: forwards many commands into the CLI container or local tmux workflows
 - `container`: runs against the local system daemon inside a containerized environment
 - `dev`: runs against the local system daemon inside the devcontainer
-- `remote`: uses `iii-runtime-api` for runtime-control commands and SSH-driven
-  helpers for deployment, sync, install, and explicit admin workflows
+- `remote`: uses `iii-runtime-api` for runtime-control commands and the key-only
+  `iii@iii.local` receiver gateway for deployment
 
 ## System Commands
 
@@ -110,8 +110,12 @@ commands over SSH. Mutating remote CLI commands are rejected while an active
 browser GUI session holds the operator lease; read-only status/list/log
 operations remain available.
 
-SSH remains available for deployment and administration commands such as
-workspace sync, install, and `iii deploy ssh`.
+Deployment SSH uses a user-owned Ed25519 identity, disables passwords and agent
+forwarding, accepts the initial lack of server host-key authentication, and
+checks the advertised logical target/profile without claiming physical-host
+authentication. The forced remote gateway accepts canonical receiver requests
+and resumable SFTP into one release-specific incoming partial only. It is not a
+general shell, source synchronization, SCP, or remote-administration surface.
 
 ## Module Map
 
@@ -126,7 +130,8 @@ workspace sync, install, and `iii deploy ssh`.
 - `deploy.py`: remote deployment/install helpers
 - `container_manager.py`: Docker Compose command wrapper used in host mode
 - `tmux_handler.py`: tmux session management
-- `ssh_manager.py`: SSH, SCP, and rsync helpers for remote workflows
+- `ssh_manager.py`: fixed-endpoint receiver requests and content-bound resumable
+  SFTP bundle transfer
 
 ## Tests
 
@@ -136,6 +141,9 @@ Tests cover:
 - daemon-client request/response behavior
 - system log selection behavior
 - tmux session materialization
+- fixed-endpoint key-only SSH, logical-target checks, resumable transfer,
+  disconnect recovery, hostile-argument rejection, and the 120-second transfer
+  measurement record
 
 Typical package-only commands:
 
