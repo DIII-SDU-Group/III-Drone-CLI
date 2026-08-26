@@ -11,6 +11,7 @@ import time
 from .runtime_api_client import RuntimeApiClient, RuntimeApiError
 from .system_client import DaemonClient
 from .tmux_handler import TmuxHandler
+from .result import CommandResult, Finding, NextAction, Outcome
 
 
 RUNTIME_BOOT = "runtime.boot"
@@ -34,6 +35,11 @@ def _configuration() -> str | None:
 
 def _profile_name() -> str:
     return os.environ.get("III_SYSTEM_PROFILE", "sim")
+
+
+def _requested_profile(args) -> str:
+    """Resolve this command only; never mutate process-global target state."""
+    return getattr(args, "profile", None) or _profile_name()
 
 
 def _session_name() -> str:
@@ -87,11 +93,17 @@ def _remote_daemon_result(response: dict) -> dict:
 
 def _print_remote_rejection(response: dict) -> None:
     rejection = response.get("rejection") or {}
-    message = rejection.get("message") or response.get("message") or "Remote runtime command rejected."
+    message = (
+        rejection.get("message")
+        or response.get("message")
+        or "Remote runtime command rejected."
+    )
     print(message)
 
 
-def _exit_remote_response(response: dict, *, operation: str | None = None, success_message: str | None = None) -> None:
+def _exit_remote_response(
+    response: dict, *, operation: str | None = None, success_message: str | None = None
+) -> None:
     if not response.get("accepted"):
         _print_remote_rejection(response)
         exit(1)
@@ -133,7 +145,11 @@ def SelectNodesCompleter(**kwargs):
     try:
         from iii_drone_supervision.system_spec import get_system_profile
 
-        return list(get_system_profile(_profile_name()).build_supervision_config()["managed_nodes"].keys())
+        return list(
+            get_system_profile(_profile_name())
+            .build_supervision_config()["managed_nodes"]
+            .keys()
+        )
     except Exception:
         return []
 
@@ -159,7 +175,9 @@ def _select_log_file(log_dir: str, *, history: bool) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime_ns)
 
 
-def _tail_latest_log(log_dir: str, follow: bool, history: bool = False, lines: int = 200) -> int:
+def _tail_latest_log(
+    log_dir: str, follow: bool, history: bool = False, lines: int = 200
+) -> int:
     directory = Path(log_dir)
     while True:
         target = _select_log_file(str(directory), history=history)
@@ -174,7 +192,9 @@ def _tail_latest_log(log_dir: str, follow: bool, history: bool = False, lines: i
 
 def _tail_file(path: str | Path, follow: bool, lines: int = 200) -> int:
     target = str(path)
-    cmd = ["tail", "-f", target] if follow else ["tail", "-n", str(max(1, lines)), target]
+    cmd = (
+        ["tail", "-f", target] if follow else ["tail", "-n", str(max(1, lines)), target]
+    )
     return subprocess.run(cmd, check=False).returncode
 
 
@@ -201,7 +221,9 @@ def _print_managed_summary(result: dict, *, operation: str) -> None:
     }[operation]
     grouped: dict[str, list[str]] = {}
     for managed_node in managed_nodes:
-        label = labels.get(managed_node.get("transition"), managed_node.get("transition", "changed"))
+        label = labels.get(
+            managed_node.get("transition"), managed_node.get("transition", "changed")
+        )
         grouped.setdefault(label, [])
         node_id = managed_node.get("key", "<unknown>")
         if node_id not in grouped[label]:
@@ -248,7 +270,8 @@ def _print_blocked_summary(blocked_nodes: dict | None) -> None:
     print("Blocked nodes:")
     for node_id, service_errors in sorted(blocked_nodes.items()):
         reasons = ", ".join(
-            f"{service_id}: {reason}" for service_id, reason in sorted(service_errors.items())
+            f"{service_id}: {reason}"
+            for service_id, reason in sorted(service_errors.items())
         )
         print(f"  {node_id}: {reasons}")
 
@@ -270,13 +293,17 @@ def _print_status_result(result: dict) -> None:
     for key, state in sorted(result.get("services", {}).items()):
         alive = "alive" if state["alive"] else "dead"
         ready = "ready" if state["ready"] else "waiting"
-        print(f"  {key}: {alive}, {ready} (starts={state['starts']}, exits={state['exits']})")
+        print(
+            f"  {key}: {alive}, {ready} (starts={state['starts']}, exits={state['exits']})"
+        )
         if not state["ready"]:
             print(f"    {state['reason']}")
     print("\nProcesses:")
     for key, state in sorted(result["processes"].items()):
         alive = "alive" if state["alive"] else "dead"
-        print(f"  {key}: {alive} (starts={state['start_count']}, exits={state['exit_count']})")
+        print(
+            f"  {key}: {alive} (starts={state['start_count']}, exits={state['exit_count']})"
+        )
 
 
 def start(args):
@@ -302,14 +329,19 @@ def start(args):
                 "include_dependencies": args.include_dependencies,
             },
         )
-        _exit_remote_response(response, operation="start", success_message="System start complete.")
+        _exit_remote_response(
+            response, operation="start", success_message="System start complete."
+        )
 
     client = _local_client()
     if not client.ping():
         print('System daemon not running. Use "iii system boot" first.')
         exit(1)
     target = "configured" if args.skip_activate else "active"
-    print(f"Starting system: target={target}, scope={_scope_text(args.select_nodes, args.include_dependencies)} ...", flush=True)
+    print(
+        f"Starting system: target={target}, scope={_scope_text(args.select_nodes, args.include_dependencies)} ...",
+        flush=True,
+    )
     try:
         result = client.start(
             activate=not args.skip_activate,
@@ -354,14 +386,19 @@ def stop(args):
                 "include_dependencies": args.include_dependencies,
             },
         )
-        _exit_remote_response(response, operation="stop", success_message="System stop complete.")
+        _exit_remote_response(
+            response, operation="stop", success_message="System stop complete."
+        )
 
     client = _local_client()
     if not client.ping():
         print('System daemon not running. Use "iii system boot" first.')
         exit(1)
     target = "inactive" if args.skip_cleanup else "unconfigured"
-    print(f"Stopping system: target={target}, scope={_scope_text(args.select_nodes, args.include_dependencies)} ...", flush=True)
+    print(
+        f"Stopping system: target={target}, scope={_scope_text(args.select_nodes, args.include_dependencies)} ...",
+        flush=True,
+    )
     result = client.stop(
         cleanup=not args.skip_cleanup,
         select_nodes=args.select_nodes,
@@ -398,22 +435,32 @@ def restart(args):
                 "include_dependencies": args.include_dependencies,
             },
         )
-        _exit_remote_response(response, operation="restart", success_message="System restart complete.")
+        _exit_remote_response(
+            response, operation="restart", success_message="System restart complete."
+        )
 
     client = _local_client()
     if not client.ping():
         print('System daemon not running. Use "iii system boot" first.')
         exit(1)
     mode = "cold" if args.cold else "warm"
-    print(f"Restarting system: mode={mode}, scope={_scope_text(args.select_nodes, args.include_dependencies)} ...", flush=True)
+    print(
+        f"Restarting system: mode={mode}, scope={_scope_text(args.select_nodes, args.include_dependencies)} ...",
+        flush=True,
+    )
     result = client.restart(
         cold=args.cold,
         select_nodes=args.select_nodes,
         include_dependencies=args.include_dependencies,
     )
-    summary_operation = "stop" if (
-        not result["success"] and result.get("error", "").startswith("System stop failed")
-    ) else "restart"
+    summary_operation = (
+        "stop"
+        if (
+            not result["success"]
+            and result.get("error", "").startswith("System stop failed")
+        )
+        else "restart"
+    )
     _print_result_summary(result, operation=summary_operation)
     if not result["success"] and result.get("error"):
         print(result["error"])
@@ -479,14 +526,19 @@ def shutdown(args):
                 "include_dependencies": args.include_dependencies,
             },
         )
-        _exit_remote_response(response, success_message="System runtime shutdown complete.")
+        _exit_remote_response(
+            response, success_message="System runtime shutdown complete."
+        )
 
     client = _local_client()
     if not client.ping():
         print("System daemon not running.")
         exit(1)
     try:
-        print(f"Shutting down system runtime: scope={_scope_text(args.select_nodes, args.include_dependencies)} ...", flush=True)
+        print(
+            f"Shutting down system runtime: scope={_scope_text(args.select_nodes, args.include_dependencies)} ...",
+            flush=True,
+        )
         result = client.shutdown(
             select_nodes=args.select_nodes,
             include_dependencies=args.include_dependencies,
@@ -501,9 +553,7 @@ def shutdown(args):
     elif result["success"] and not result.get("message"):
         print("System runtime shutdown complete.")
     should_kill_session = (
-        result["success"]
-        and not args.keep_session
-        and not args.select_nodes
+        result["success"] and not args.keep_session and not args.select_nodes
     )
     if should_kill_session:
         TmuxHandler().kill_session(_session_name())
@@ -511,20 +561,23 @@ def shutdown(args):
 
 
 def boot(args):
+    profile = _requested_profile(args)
     if _configuration() == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system boot",
-            _filter_args(["--attach" if args.attach else ""]),
+            _filter_args(["--attach" if args.attach else "", "--profile", profile]),
         )
         exit(0 if success else 1)
     if _configuration() == "remote":
-        response = _remote_command(RUNTIME_BOOT, {"profile": _profile_name()})
+        response = _remote_command(RUNTIME_BOOT, {"profile": profile})
         message = "System boot request accepted."
         if args.attach:
-            message += " Use an explicit SSH workflow to attach to the remote tmux session."
+            message += (
+                " Use an explicit SSH workflow to attach to the remote tmux session."
+            )
         _exit_remote_response(response, success_message=message)
 
-    if _profile_name() == "sim":
+    if profile == "sim":
         from .mission_preflight import MissionPreflightError
 
         try:
@@ -536,7 +589,7 @@ def boot(args):
         print(f"Mission catalog {action}: {preflight['catalog_hash']}")
 
     client = _ensure_local_daemon()
-    response = client.boot(_profile_name())
+    response = client.boot(profile)
     tmux_handler = TmuxHandler()
     session_spec = response["tmux"]
     session_running = tmux_handler.session_running(session_spec["session_name"])
@@ -544,7 +597,9 @@ def boot(args):
         success = tmux_handler.attach(session_spec["session_name"])
         exit(0 if success else 1)
     if response.get("booted") and session_running:
-        print('System already booted. Use "iii system attach" to attach to the tmux session.')
+        print(
+            'System already booted. Use "iii system attach" to attach to the tmux session.'
+        )
         exit(0)
     if session_running:
         tmux_handler.kill_session(session_spec["session_name"])
@@ -554,13 +609,130 @@ def boot(args):
     exit(1)
 
 
+def clock_sync(args):
+    """Synchronize the receiver clock through the authenticated fixed SSH path."""
+    from .ssh_manager import SSHManager
+
+    operation_id = getattr(args, "_iii_operation_id", None)
+    profile = args.profile
+    try:
+        if args.target != "real":
+            raise ValueError(
+                "clock synchronization is available only for --target real"
+            )
+        manager = SSHManager()
+        samples = []
+        advertised = None
+        for index in range(5):
+            before_monotonic = time.monotonic_ns()
+            before_wall = time.time_ns()
+            status = manager.verify_logical_target(
+                profile=profile,
+                operation_id=f"{operation_id}-sample-{index}",
+            )
+            after_monotonic = time.monotonic_ns()
+            rtt = after_monotonic - before_monotonic
+            clock = status.get("clock")
+            if not isinstance(clock, dict):
+                raise ValueError("receiver did not advertise clock-gate sampling data")
+            advertised = status.get("target")
+            midpoint = before_wall + rtt // 2
+            target_wall = clock.get("target_wall_ns")
+            target_monotonic = clock.get("target_monotonic_ns")
+            boot_id = clock.get("boot_id")
+            if (
+                not isinstance(target_wall, int)
+                or not isinstance(target_monotonic, int)
+                or not isinstance(boot_id, str)
+            ):
+                raise ValueError("receiver clock sample is malformed")
+            samples.append(
+                {
+                    "target_boot_id": boot_id,
+                    "target_monotonic_ns": target_monotonic,
+                    "target_wall_ns": target_wall,
+                    "operator_midpoint_utc_ns": midpoint,
+                    "rtt_ns": rtt,
+                    "offset_ns": target_wall - midpoint,
+                }
+            )
+        planned = manager.receiver_request(
+            {
+                "protocol_version": "1",
+                "action": "plan-clock-sync",
+                "operation_id": operation_id,
+                "client_id": manager.client_id,
+                "payload": {
+                    "samples": samples,
+                    "target": {"logical_id": "drone", "profile": profile},
+                },
+                "nonce": None,
+            }
+        )
+        accepted = manager.receiver_request(
+            {
+                "protocol_version": "1",
+                "action": "clock-sync",
+                "operation_id": operation_id,
+                "client_id": manager.client_id,
+                "payload": {"plan": planned["plan"]},
+                "nonce": planned["nonce"],
+            }
+        )
+    except Exception as exc:
+        code = getattr(exc, "code", "III_CLOCK_SYNC_REJECTED")
+        return CommandResult(
+            command="iii system clock sync",
+            outcome=Outcome.REJECTED,
+            summary="Authenticated aircraft clock synchronization was refused.",
+            code=code,
+            target="iii.local",
+            profile=profile,
+            findings=(Finding(code, str(exc)),),
+            next_actions=(
+                NextAction(
+                    ("iii", "deploy", "status", "--target", "real"),
+                    "Inspect receiver reachability, profile, and clock gate.",
+                ),
+            ),
+        )
+    return CommandResult(
+        command="iii system clock sync",
+        outcome=Outcome.SUCCESS,
+        summary=(
+            f"Clock synchronization was durably accepted by iii.local "
+            f"for advertised profile {advertised['profile']}."
+        ),
+        code="III_CLOCK_SYNC_ACCEPTED",
+        target="iii.local",
+        profile=profile,
+        evidence=(planned["plan"]["plan_id"],),
+        payload_schema="iii.clock-sync-client/v1",
+        payload={
+            "samples": samples,
+            "preflight": planned.get("preflight"),
+            "receiver_acceptance": accepted,
+            "expected_target": {"logical_id": "drone", "profile": profile},
+            "advertised_target": advertised,
+        },
+        next_actions=(
+            NextAction(
+                ("iii", "deploy", "status", "--target", "real"),
+                "Verify receiver completion and the resulting clock gate.",
+            ),
+        ),
+    )
+
+
 def attach(args):
     del args
     if _configuration() == "host":
         success = _host_forward("/home/iii/.local/bin/iii system attach", [])
         exit(0 if success else 1)
     if _configuration() == "remote":
-        print("Remote tmux attach is no longer forwarded through runtime-control commands. Use an explicit SSH workflow.")
+        print(
+            "Remote tmux attach is no longer forwarded through runtime-control commands. Use an explicit SSH workflow."
+        )
         exit(1)
 
     success = TmuxHandler().attach(_session_name())
@@ -618,7 +790,9 @@ def service(args):
         forwarded_args = [args.service_action]
         if getattr(args, "service_id", None):
             forwarded_args.append(args.service_id)
-        success = _host_forward("/home/iii/.local/bin/iii system service", forwarded_args)
+        success = _host_forward(
+            "/home/iii/.local/bin/iii system service", forwarded_args
+        )
         exit(0 if success else 1)
     if _configuration() == "remote":
         if args.service_action == "list":
@@ -662,7 +836,10 @@ def service(args):
         "stop": "Stopping",
         "restart": "Restarting",
     }
-    print(f"{service_verbs[args.service_action]} service {args.service_id} ...", flush=True)
+    print(
+        f"{service_verbs[args.service_action]} service {args.service_id} ...",
+        flush=True,
+    )
     result = method(args.service_id)
     alive = "alive" if result.get("alive") else "dead"
     ready = "ready" if result.get("ready") else "waiting"
@@ -681,10 +858,14 @@ def daemon(args):
         forwarded_args = [args.daemon_action]
         if getattr(args, "follow", False):
             forwarded_args.append("--follow")
-        success = _host_forward("/home/iii/.local/bin/iii system daemon", forwarded_args)
+        success = _host_forward(
+            "/home/iii/.local/bin/iii system daemon", forwarded_args
+        )
         exit(0 if success else 1)
     if _configuration() == "remote":
-        print("Remote daemon systemd control is not forwarded over SSH. Use the runtime API service locally or an explicit SSH workflow.")
+        print(
+            "Remote daemon systemd control is not forwarded over SSH. Use the runtime API service locally or an explicit SSH workflow."
+        )
         exit(1)
 
     if args.daemon_action in {"start", "stop", "restart", "status"}:
@@ -710,7 +891,9 @@ def kill_session(args):
         success = _host_forward("/home/iii/.local/bin/iii system kill-session", [])
         exit(0 if success else 1)
     if _configuration() == "remote":
-        print("Remote tmux session control is not forwarded through runtime-control commands. Use an explicit SSH workflow.")
+        print(
+            "Remote tmux session control is not forwarded through runtime-control commands. Use an explicit SSH workflow."
+        )
         exit(1)
 
     success = TmuxHandler().kill_session(_session_name())
@@ -724,12 +907,14 @@ def logs(args):
     if _configuration() == "host":
         success = _host_forward(
             f"/home/iii/.local/bin/iii system logs {args.entity_id}",
-            _filter_args([
-                "--follow" if follow else "",
-                "--history" if history else "",
-                "--lines",
-                str(lines),
-            ]),
+            _filter_args(
+                [
+                    "--follow" if follow else "",
+                    "--history" if history else "",
+                    "--lines",
+                    str(lines),
+                ]
+            ),
         )
         exit(0 if success else 1)
     if _configuration() == "remote":
@@ -751,12 +936,14 @@ def logs(args):
         exit(1)
     if args.entity_id == "daemon":
         exit(_tail_file(client.daemon_log, follow, lines=lines))
-    exit(_tail_latest_log(
-        client.log_dir(args.entity_id),
-        follow,
-        history=history,
-        lines=lines,
-    ))
+    exit(
+        _tail_latest_log(
+            client.log_dir(args.entity_id),
+            follow,
+            history=history,
+            lines=lines,
+        )
+    )
 
 
 def initialize(parser):
@@ -825,9 +1012,13 @@ def initialize(parser):
 
     status_parser = subparsers.add_parser("status", help="Displays the system status")
     status_parser.set_defaults(func=status)
-    status_parser.add_argument("--watch", action="store_true", help="Refresh status continuously.")
+    status_parser.add_argument(
+        "--watch", action="store_true", help="Refresh status continuously."
+    )
 
-    shutdown_parser = subparsers.add_parser("shutdown", help="Shuts down the system runtime")
+    shutdown_parser = subparsers.add_parser(
+        "shutdown", help="Shuts down the system runtime"
+    )
     shutdown_parser.set_defaults(func=shutdown)
     shutdown_parser.add_argument(
         "--keep-session",
@@ -853,32 +1044,68 @@ def initialize(parser):
         action="store_true",
         help="Attach to the tmux session after booting.",
     )
+    boot_parser.add_argument(
+        "--profile",
+        choices=("sim", "real", "opti_track"),
+        help="explicit cold runtime profile for this boot only",
+    )
 
-    attach_parser = subparsers.add_parser("attach", help="Attaches to the system tmux session")
+    clock_parser = subparsers.add_parser(
+        "clock", help="Authenticated receiver-owned clock operations"
+    )
+    clock_subparsers = clock_parser.add_subparsers(dest="clock_action", required=True)
+    clock_sync_parser = clock_subparsers.add_parser(
+        "sync", help="sample and synchronize the real aircraft clock"
+    )
+    clock_sync_parser.add_argument("--target", choices=("sim", "real"), default="real")
+    clock_sync_parser.add_argument(
+        "--profile", choices=("real", "opti_track"), default="real"
+    )
+    clock_sync_parser.set_defaults(func=clock_sync, _iii_mutating=True)
+
+    attach_parser = subparsers.add_parser(
+        "attach", help="Attaches to the system tmux session"
+    )
     attach_parser.set_defaults(func=attach)
 
-    list_nodes_parser = subparsers.add_parser("list-nodes", help="Lists all managed nodes in the system")
+    list_nodes_parser = subparsers.add_parser(
+        "list-nodes", help="Lists all managed nodes in the system"
+    )
     list_nodes_parser.set_defaults(func=list_nodes)
 
-    list_services_parser = subparsers.add_parser("list-services", help="Lists all daemon-managed services")
+    list_services_parser = subparsers.add_parser(
+        "list-services", help="Lists all daemon-managed services"
+    )
     list_services_parser.set_defaults(func=list_services)
 
-    service_parser = subparsers.add_parser("service", help="Controls daemon-managed services")
-    service_subparsers = service_parser.add_subparsers(dest="service_action", required=True)
+    service_parser = subparsers.add_parser(
+        "service", help="Controls daemon-managed services"
+    )
+    service_subparsers = service_parser.add_subparsers(
+        dest="service_action", required=True
+    )
 
-    service_list_parser = service_subparsers.add_parser("list", help="Lists daemon-managed services")
+    service_list_parser = service_subparsers.add_parser(
+        "list", help="Lists daemon-managed services"
+    )
     service_list_parser.set_defaults(func=service)
 
     for action in ("start", "stop", "restart"):
-        service_action_parser = service_subparsers.add_parser(action, help=f"{action.capitalize()} a service")
+        service_action_parser = service_subparsers.add_parser(
+            action, help=f"{action.capitalize()} a service"
+        )
         service_action_parser.set_defaults(func=service)
         service_action_parser.add_argument(
             "service_id",
             help="Service identifier from the system specification.",
         ).completer = SelectServicesCompleter
 
-    daemon_parser = subparsers.add_parser("daemon", help="Controls the systemd-owned III daemon")
-    daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_action", required=True)
+    daemon_parser = subparsers.add_parser(
+        "daemon", help="Controls the systemd-owned III daemon"
+    )
+    daemon_subparsers = daemon_parser.add_subparsers(
+        dest="daemon_action", required=True
+    )
 
     daemon_help = {
         "start": "Start the daemon",
@@ -890,17 +1117,27 @@ def initialize(parser):
         daemon_action_parser = daemon_subparsers.add_parser(action, help=help_text)
         daemon_action_parser.set_defaults(func=daemon)
 
-    daemon_logs_parser = daemon_subparsers.add_parser("logs", help="Shows daemon journal logs")
+    daemon_logs_parser = daemon_subparsers.add_parser(
+        "logs", help="Shows daemon journal logs"
+    )
     daemon_logs_parser.set_defaults(func=daemon)
-    daemon_logs_parser.add_argument("--follow", action="store_true", help="Follow daemon journal logs.")
+    daemon_logs_parser.add_argument(
+        "--follow", action="store_true", help="Follow daemon journal logs."
+    )
 
-    kill_session_parser = subparsers.add_parser("kill-session", help="Kills the system tmux session")
+    kill_session_parser = subparsers.add_parser(
+        "kill-session", help="Kills the system tmux session"
+    )
     kill_session_parser.set_defaults(func=kill_session)
 
     logs_parser = subparsers.add_parser("logs", help="Tails logs for a system entity")
     logs_parser.set_defaults(func=logs)
-    logs_parser.add_argument("entity_id", help="Entity identifier from the system specification.")
-    logs_parser.add_argument("--follow", action="store_true", help="Follow the latest log file.")
+    logs_parser.add_argument(
+        "entity_id", help="Entity identifier from the system specification."
+    )
+    logs_parser.add_argument(
+        "--follow", action="store_true", help="Follow the latest log file."
+    )
     logs_parser.add_argument(
         "--history",
         action="store_true",

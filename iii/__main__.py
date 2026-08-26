@@ -34,39 +34,62 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="subcommand")
 
     system = import_module("iii.system")
-    parser_system = subparsers.add_parser("system", help="Commands for system management")
+    parser_system = subparsers.add_parser(
+        "system", help="Commands for system management"
+    )
     system.initialize(parser_system)
 
-    parser_config = subparsers.add_parser("config", help="Launches configuration manager")
+    parser_config = subparsers.add_parser(
+        "config", help="Launches configuration manager"
+    )
     parser_config.set_defaults(func=lambda _args: _run_config(), action="run")
 
     build = import_module("iii.build")
-    parser_build = subparsers.add_parser("build", help="Commands for building parts of the system")
+    parser_build = subparsers.add_parser(
+        "build", help="Commands for building parts of the system"
+    )
     build.initialize(parser_build)
 
     deploy = import_module("iii.deploy")
-    parser_deploy = subparsers.add_parser("deploy", help="Commands for deploying parts of the system")
+    parser_deploy = subparsers.add_parser(
+        "deploy", help="Commands for deploying parts of the system"
+    )
     deploy.initialize(parser_deploy)
 
     release = import_module("iii.release")
-    parser_release = subparsers.add_parser("release", help="Commands for qualified releases")
+    parser_release = subparsers.add_parser(
+        "release", help="Commands for qualified releases"
+    )
     release.initialize(parser_release)
 
     mission = import_module("iii.mission")
-    parser_mission = subparsers.add_parser("mission", help="Commands for installed mission catalogs")
+    parser_mission = subparsers.add_parser(
+        "mission", help="Commands for installed mission catalogs"
+    )
     mission.initialize(parser_mission)
+
+    field = import_module("iii.field")
+    parser_field = subparsers.add_parser(
+        "field", help="Commands for field preparation and readiness"
+    )
+    field.initialize(parser_field)
 
     inventory_parser(parser)
     return parser
 
 
-def _subparser(parser: argparse.ArgumentParser, argv: Sequence[str]) -> tuple[argparse.ArgumentParser, tuple[str, ...]]:
+def _subparser(
+    parser: argparse.ArgumentParser, argv: Sequence[str]
+) -> tuple[argparse.ArgumentParser, tuple[str, ...]]:
     current = parser
     path: list[str] = []
     for token in argv:
         selected = None
         for action in current._actions:
-            if isinstance(action, argparse._SubParsersAction) and token in action.choices:
+            if (
+                isinstance(action, argparse._SubParsersAction)
+                and token in action.choices
+            ):
                 selected = action.choices[token]
                 break
         if selected is None:
@@ -95,8 +118,19 @@ def main(
     try:
         options, parser_argv = extract_universal_options(raw_argv)
     except ParserSignal as exc:
-        result = parser_result(argv=raw_argv, help_text="Run 'iii --help' for usage.", error=exc.message)
-        return render(result, output=("json" if "--json" in raw_argv or "--output=json" in raw_argv else "human"), stdout=out, stderr=err)
+        result = parser_result(
+            argv=raw_argv, help_text="Run 'iii --help' for usage.", error=exc.message
+        )
+        return render(
+            result,
+            output=(
+                "json"
+                if "--json" in raw_argv or "--output=json" in raw_argv
+                else "human"
+            ),
+            stdout=out,
+            stderr=err,
+        )
 
     parser = build_parser()
     selected_parser, path = _subparser(parser, parser_argv)
@@ -109,12 +143,25 @@ def main(
     except ParserSignal as exc:
         help_text = parser_stdout.getvalue() or selected_parser.format_help()
         error = None if exc.status == 0 else exc.message
-        result = parser_result(argv=parser_argv, help_text=help_text, error=error, path=path)
-        return render(result, output=options.output, stdout=out, stderr=err, diagnostics=parser_stderr.getvalue())
+        result = parser_result(
+            argv=parser_argv, help_text=help_text, error=error, path=path
+        )
+        return render(
+            result,
+            output=options.output,
+            stdout=out,
+            stderr=err,
+            diagnostics=parser_stderr.getvalue(),
+        )
 
     spec = getattr(args, "_iii_command_spec", None)
     if spec is None:
-        result = parser_result(argv=parser_argv, help_text=selected_parser.format_help(), error=None, path=path)
+        result = parser_result(
+            argv=parser_argv,
+            help_text=selected_parser.format_help(),
+            error=None,
+            path=path,
+        )
         return render(result, output=options.output, stdout=out, stderr=err)
 
     result, diagnostics = invoke(
@@ -126,7 +173,9 @@ def main(
         input_stream=input_stream,
         error_stream=err,
     )
-    return render(result, output=options.output, stdout=out, stderr=err, diagnostics=diagnostics)
+    return render(
+        result, output=options.output, stdout=out, stderr=err, diagnostics=diagnostics
+    )
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+from concurrent.futures import ProcessPoolExecutor
 
 import jsonschema
 import pytest
@@ -20,9 +21,30 @@ from iii.runner import (
 )
 
 
-SCHEMA = Path(__file__).resolve().parents[1] / "iii" / "schemas" / "command-result-v1.schema.json"
-PLAN_SCHEMA = Path(__file__).resolve().parents[1] / "iii" / "schemas" / "operation-plan-v1.schema.json"
-STATE_SCHEMA = Path(__file__).resolve().parents[1] / "iii" / "schemas" / "operation-state-v1.schema.json"
+SCHEMA = (
+    Path(__file__).resolve().parents[1]
+    / "iii"
+    / "schemas"
+    / "command-result-v1.schema.json"
+)
+PLAN_SCHEMA = (
+    Path(__file__).resolve().parents[1]
+    / "iii"
+    / "schemas"
+    / "operation-plan-v1.schema.json"
+)
+STATE_SCHEMA = (
+    Path(__file__).resolve().parents[1]
+    / "iii"
+    / "schemas"
+    / "operation-state-v1.schema.json"
+)
+
+
+def _concurrent_record_write(root: str, index: int) -> None:
+    OperationStore(Path(root)).write_record(
+        "iii-concurrent-records", f"record-{index}.json", {"index": index}
+    )
 
 
 def _result(outcome=Outcome.SUCCESS, **overrides):
@@ -43,7 +65,9 @@ def test_result_schema_golden_and_exit_family(outcome):
     value = json.loads(result.render_json())
     # The contract uses only Draft 7-compatible keywords; this keeps the suite
     # runnable in the ROS image's older validator as well as current CI.
-    jsonschema.Draft7Validator(json.loads(SCHEMA.read_text(encoding="utf-8"))).validate(value)
+    jsonschema.Draft7Validator(json.loads(SCHEMA.read_text(encoding="utf-8"))).validate(
+        value
+    )
     assert value["exit_code"] == outcome.exit_code
 
 
@@ -66,13 +90,18 @@ def test_human_next_and_json_next_are_the_same_argv_and_reason():
     assert structured["shell_command"] in human
     assert structured["reason"] in human
     assert structured["confirmation_required"] is True
-    assert structured["arguments"] == {"target": "target with spaces", "profile": "real"}
+    assert structured["arguments"] == {
+        "target": "target with spaces",
+        "profile": "real",
+    }
 
 
 def test_terminal_result_requires_explicit_reason():
     with pytest.raises(ValueError, match="next action"):
         _result(next_actions=())
-    terminal = _result(next_actions=(), terminal_reason="The aircraft was decommissioned.")
+    terminal = _result(
+        next_actions=(), terminal_reason="The aircraft was decommissioned."
+    )
     assert terminal.to_dict()["next_actions"] == []
     assert "decommissioned" in terminal.render_human()
 
@@ -122,7 +151,9 @@ def test_json_stdout_is_clean_when_child_process_writes(monkeypatch, tmp_path):
         (["system", "service", "start", "--json"], "III_USAGE_ERROR", 64),
     ],
 )
-def test_help_and_parser_errors_share_result_and_next_action(argv, expected_code, expected_status):
+def test_help_and_parser_errors_share_result_and_next_action(
+    argv, expected_code, expected_status
+):
     stdout = StringIO()
     status = main(argv, stdout=stdout, stderr=StringIO())
     value = json.loads(stdout.getvalue())
@@ -131,10 +162,16 @@ def test_help_and_parser_errors_share_result_and_next_action(argv, expected_code
     assert value["next_actions"]
     assert value["next_actions"][0]["command"][-1] == "--help"
     if expected_code == "III_HELP":
-        assert value["next_actions"][0]["command"] != ["iii", *[item for item in argv if item not in {"--json", "--help"}], "--help"]
+        assert value["next_actions"][0]["command"] != [
+            "iii",
+            *[item for item in argv if item not in {"--json", "--help"}],
+            "--help",
+        ]
 
 
-def test_noninteractive_confirmation_refusal_never_calls_mutation(monkeypatch, tmp_path):
+def test_noninteractive_confirmation_refusal_never_calls_mutation(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("CLI_CONFIGURATION", "dev")
     monkeypatch.setenv("III_OPERATION_STATE_DIR", str(tmp_path))
     called = []
@@ -163,7 +200,9 @@ def test_noninteractive_nested_prompt_is_structured_and_durable(monkeypatch, tmp
         args=args,
         spec=CommandSpec(("deploy", "ssh"), mutating=True, interactive=True),
         argv=["deploy", "ssh"],
-        options=UniversalOptions(non_interactive=True, confirm=True, operation_id="iii-prompt-test"),
+        options=UniversalOptions(
+            non_interactive=True, confirm=True, operation_id="iii-prompt-test"
+        ),
     )
     assert result.code == "III_REQUIRED_INPUT"
     assert result.findings[0].field == "input"
@@ -177,13 +216,45 @@ def test_every_existing_parser_leaf_is_inventory_covered():
     assert inventory
     assert all(path and spec.path == path for path, spec in inventory.items())
     assert all(spec.identity.startswith("iii ") for spec in inventory.values())
-    assert {path[0] for path in inventory} == {"system", "build", "deploy", "config", "release", "mission"}
+    assert {path[0] for path in inventory} == {
+        "system",
+        "build",
+        "deploy",
+        "config",
+        "release",
+        "mission",
+        "field",
+    }
     # Future providers must select from this declared universal contract surface.
     assert {
-        "system", "build", "deploy", "release", "host", "gc", "qgc", "px4",
-        "mission", "config", "capture", "log", "records", "governance", "field",
+        "system",
+        "build",
+        "deploy",
+        "release",
+        "host",
+        "gc",
+        "qgc",
+        "px4",
+        "mission",
+        "config",
+        "capture",
+        "log",
+        "records",
+        "governance",
+        "field",
         "documentation",
     } == REQUIRED_COMMAND_FAMILIES
+
+
+def test_operation_registry_serializes_concurrent_atomic_record_writes(tmp_path):
+    with ProcessPoolExecutor(max_workers=4) as executor:
+        list(executor.map(_concurrent_record_write, [str(tmp_path)] * 12, range(12)))
+    store = OperationStore(tmp_path)
+    assert [
+        store.load_record("iii-concurrent-records", f"record-{index}.json")["index"]
+        for index in range(12)
+    ] == list(range(12))
+    assert list(tmp_path.rglob("*.tmp")) == []
 
 
 def test_ctrl_c_retains_exact_reattach_command(monkeypatch, tmp_path):
@@ -197,7 +268,9 @@ def test_ctrl_c_retains_exact_reattach_command(monkeypatch, tmp_path):
         args=argparse.Namespace(func=interrupted),
         spec=CommandSpec(("system", "start"), mutating=True),
         argv=["system", "start", "--select-node", "camera node"],
-        options=UniversalOptions(non_interactive=True, confirm=True, operation_id="iii-remote-detach"),
+        options=UniversalOptions(
+            non_interactive=True, confirm=True, operation_id="iii-remote-detach"
+        ),
     )
     assert result.outcome is Outcome.INTERRUPTED
     assert result.exit_code == 130
@@ -219,7 +292,9 @@ def test_completed_operation_is_idempotent_and_does_not_repeat(monkeypatch, tmp_
         called.append(True)
 
     arguments = argparse.Namespace(func=mutation)
-    options = UniversalOptions(non_interactive=True, confirm=True, operation_id="iii-idempotent-test")
+    options = UniversalOptions(
+        non_interactive=True, confirm=True, operation_id="iii-idempotent-test"
+    )
     first, _ = invoke(
         args=arguments,
         spec=CommandSpec(("system", "start"), mutating=True),
@@ -284,8 +359,12 @@ def test_operation_store_files_are_private_and_content_addressed(tmp_path):
     )
     store = OperationStore(tmp_path)
     state = store.retain_plan(plan)
-    jsonschema.Draft7Validator(json.loads(PLAN_SCHEMA.read_text(encoding="utf-8"))).validate(plan)
-    jsonschema.Draft7Validator(json.loads(STATE_SCHEMA.read_text(encoding="utf-8"))).validate(state)
+    jsonschema.Draft7Validator(
+        json.loads(PLAN_SCHEMA.read_text(encoding="utf-8"))
+    ).validate(plan)
+    jsonschema.Draft7Validator(
+        json.loads(STATE_SCHEMA.read_text(encoding="utf-8"))
+    ).validate(state)
     assert state["plan_id"] == plan["plan_id"]
     assert len(plan["plan_id"]) == 64
     assert store.plan_path("iii-storage-test").stat().st_mode & 0o777 == 0o600
@@ -322,6 +401,8 @@ def test_tampered_retained_plan_is_rejected(monkeypatch, tmp_path):
 def test_symbolic_link_state_file_is_rejected(tmp_path):
     target = tmp_path / "outside.json"
     target.write_text("{}", encoding="utf-8")
-    (tmp_path / "iii-linked-state.json").symlink_to(target)
+    operation = tmp_path / "iii-linked-state"
+    operation.mkdir()
+    (operation / "state.json").symlink_to(target)
     with pytest.raises(OperationError, match="symbolic-link"):
         OperationStore(tmp_path).load_state("iii-linked-state")

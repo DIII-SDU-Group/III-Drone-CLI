@@ -27,8 +27,21 @@ from .result import CommandResult, Finding, NextAction, Outcome, internal_error_
 
 SUPPORTED_CONFIGURATIONS = {"host", "container", "remote", "dev"}
 REQUIRED_COMMAND_FAMILIES = {
-    "system", "build", "deploy", "release", "host", "gc", "qgc", "px4",
-    "mission", "config", "capture", "log", "records", "governance", "field",
+    "system",
+    "build",
+    "deploy",
+    "release",
+    "host",
+    "gc",
+    "qgc",
+    "px4",
+    "mission",
+    "config",
+    "capture",
+    "log",
+    "records",
+    "governance",
+    "field",
     "documentation",
 }
 
@@ -74,13 +87,16 @@ class CommandSpec:
     path: tuple[str, ...]
     mutating: bool
     interactive: bool = False
+    plan_provider: Callable[[argparse.Namespace], Mapping[str, Any]] | None = None
 
     @property
     def identity(self) -> str:
         return "iii " + " ".join(self.path)
 
 
-def extract_universal_options(argv: Sequence[str]) -> tuple[UniversalOptions, list[str]]:
+def extract_universal_options(
+    argv: Sequence[str],
+) -> tuple[UniversalOptions, list[str]]:
     """Extract universal controls from any position without burdening leaf parsers."""
 
     output = "human"
@@ -130,37 +146,81 @@ def extract_universal_options(argv: Sequence[str]) -> tuple[UniversalOptions, li
         index += 1
     if resume and identifier is None:
         raise ParserSignal(64, "--resume requires --operation-id")
-    return UniversalOptions(output, non_interactive, dry_run, confirm, identifier, resume), remaining
+    return (
+        UniversalOptions(output, non_interactive, dry_run, confirm, identifier, resume),
+        remaining,
+    )
 
 
 def add_universal_help(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("universal result and operation controls")
-    group.add_argument("--output", choices=("human", "json"), help="render the same result envelope as human text or JSON")
+    group.add_argument(
+        "--output",
+        choices=("human", "json"),
+        help="render the same result envelope as human text or JSON",
+    )
     group.add_argument("--json", action="store_true", help="shortcut for --output=json")
-    group.add_argument("--non-interactive", action="store_true", help="refuse every prompt and return III_REQUIRED_INPUT")
-    group.add_argument("--dry-run", action="store_true", help="retain and render an exact operation plan without mutation")
-    group.add_argument("--operation-id", metavar="ID", help="bind or resume durable operation state")
-    group.add_argument("--resume", action="store_true", help="resume the exact retained operation plan")
-    group.add_argument("--confirm", action="store_true", help="confirm the exact mutating operation plan")
+    group.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="refuse every prompt and return III_REQUIRED_INPUT",
+    )
+    group.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="retain and render an exact operation plan without mutation",
+    )
+    group.add_argument(
+        "--operation-id", metavar="ID", help="bind or resume durable operation state"
+    )
+    group.add_argument(
+        "--resume", action="store_true", help="resume the exact retained operation plan"
+    )
+    group.add_argument(
+        "--confirm",
+        action="store_true",
+        help="confirm the exact mutating operation plan",
+    )
 
 
 def _is_mutating(path: tuple[str, ...]) -> bool:
     if not path:
         return False
-    if path[0] in {"build", "deploy", "release", "host", "governance", "field", "documentation"}:
+    if path[0] in {
+        "build",
+        "deploy",
+        "release",
+        "host",
+        "governance",
+        "field",
+        "documentation",
+    }:
         return True
     if path[0] != "system":
         return False
-    if len(path) >= 2 and path[1] in {"start", "stop", "restart", "shutdown", "boot", "kill-session"}:
+    if len(path) >= 2 and path[1] in {
+        "start",
+        "stop",
+        "restart",
+        "shutdown",
+        "boot",
+        "kill-session",
+    }:
         return True
-    return len(path) >= 3 and path[1] in {"service", "daemon"} and path[2] in {"start", "stop", "restart"}
+    return (
+        len(path) >= 3
+        and path[1] in {"service", "daemon"}
+        and path[2] in {"start", "stop", "restart"}
+    )
 
 
 def _is_interactive(path: tuple[str, ...]) -> bool:
     return path in {("config",), ("system", "attach"), ("deploy", "ssh")}
 
 
-def inventory_parser(parser: argparse.ArgumentParser) -> dict[tuple[str, ...], CommandSpec]:
+def inventory_parser(
+    parser: argparse.ArgumentParser,
+) -> dict[tuple[str, ...], CommandSpec]:
     """Annotate every executable leaf and return the coverage inventory."""
 
     inventory: dict[tuple[str, ...], CommandSpec] = {}
@@ -180,6 +240,7 @@ def inventory_parser(parser: argparse.ArgumentParser) -> dict[tuple[str, ...], C
             prefix,
             bool(current._defaults.get("_iii_mutating", _is_mutating(prefix))),
             bool(current._defaults.get("_iii_interactive", _is_interactive(prefix))),
+            current._defaults.get("_iii_plan_provider"),
         )
         current.set_defaults(_iii_command_spec=spec)
         inventory[prefix] = spec
@@ -224,11 +285,24 @@ def parser_result(
     )
 
 
-def _context(args: argparse.Namespace, environment: Mapping[str, str]) -> tuple[str | None, str | None, str | None]:
-    target = next((str(getattr(args, name)) for name in ("target", "host", "entity_id") if getattr(args, name, None)), None)
+def _context(
+    args: argparse.Namespace, environment: Mapping[str, str]
+) -> tuple[str | None, str | None, str | None]:
+    target = next(
+        (
+            str(getattr(args, name))
+            for name in ("target", "host", "entity_id")
+            if getattr(args, name, None)
+        ),
+        None,
+    )
     profile = getattr(args, "profile", None) or environment.get("III_SYSTEM_PROFILE")
     release_id = getattr(args, "release_id", None) or getattr(args, "version", None)
-    return target, str(profile) if profile else None, str(release_id) if release_id else None
+    return (
+        target,
+        str(profile) if profile else None,
+        str(release_id) if release_id else None,
+    )
 
 
 def _action_for(
@@ -242,7 +316,11 @@ def _action_for(
         command = ("iii", "system", "status")
         reason = "Verify the resulting runtime state."
     else:
-        command = ("iii", *spec.path[:-1], "--help") if len(spec.path) > 1 else ("iii", spec.path[0], "--help")
+        command = (
+            ("iii", *spec.path[:-1], "--help")
+            if len(spec.path) > 1
+            else ("iii", spec.path[0], "--help")
+        )
         reason = "Inspect related commands and the next operation for this context."
     return NextAction(
         command,
@@ -250,11 +328,21 @@ def _action_for(
         target=target,
         profile=profile,
         operation_id=operation_id,
-        arguments={key: value for key, value in {"target": target, "profile": profile, "operation_id": operation_id}.items() if value is not None},
+        arguments={
+            key: value
+            for key, value in {
+                "target": target,
+                "profile": profile,
+                "operation_id": operation_id,
+            }.items()
+            if value is not None
+        },
     )
 
 
-def _configuration_failure(spec: CommandSpec, environment: Mapping[str, str]) -> CommandResult | None:
+def _configuration_failure(
+    spec: CommandSpec, environment: Mapping[str, str]
+) -> CommandResult | None:
     if not spec.path or spec.path[0] not in {"system", "build", "deploy", "config"}:
         return None
     configuration = environment.get("CLI_CONFIGURATION")
@@ -270,7 +358,9 @@ def _configuration_failure(spec: CommandSpec, environment: Mapping[str, str]) ->
         outcome=Outcome.REJECTED,
         summary="The III environment profile is not ready.",
         code="III_CONFIGURATION_REQUIRED",
-        findings=(Finding("III_CONFIGURATION_REQUIRED", detail, field="CLI_CONFIGURATION"),),
+        findings=(
+            Finding("III_CONFIGURATION_REQUIRED", detail, field="CLI_CONFIGURATION"),
+        ),
         next_actions=(
             NextAction(
                 ("bash", "-lc", "source setup/setup_dev.bash && iii --help"),
@@ -293,7 +383,9 @@ def _prompt_policy(non_interactive: bool) -> Iterator[None]:
     def reject_input(prompt: str = "") -> str:
         raise RequiredInput("input", prompt or "interactive input")
 
-    def reject_password(prompt: str = "Password: ", stream: TextIO | None = None) -> str:
+    def reject_password(
+        prompt: str = "Password: ", stream: TextIO | None = None
+    ) -> str:
         del stream
         raise RequiredInput("password", prompt)
 
@@ -341,6 +433,7 @@ def _retained_plan(
     target: str | None,
     profile: str | None,
     release_id: str | None,
+    preflight: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     existing = store.load_plan(identifier)
     if existing is not None:
@@ -350,14 +443,20 @@ def _retained_plan(
             "mutating": spec.mutating,
             "context": {"target": target, "profile": profile, "release_id": release_id},
         }
+        if preflight is not None:
+            expected["preflight"] = dict(preflight)
         observed = {key: existing.get(key) for key in expected}
         if observed != expected:
-            raise OperationConflict("operation ID is bound to a different exact command or context")
+            raise OperationConflict(
+                "operation ID is bound to a different exact command or context"
+            )
         state = store.load_state(identifier)
         if state is None:
             state = store.retain_plan(existing)
         elif state.get("plan_id") != existing.get("plan_id"):
-            raise OperationConflict("retained operation state is bound to a different plan")
+            raise OperationConflict(
+                "retained operation state is bound to a different plan"
+            )
         return existing, state
     plan = create_plan(
         identifier=identifier,
@@ -367,12 +466,20 @@ def _retained_plan(
         target=target,
         profile=profile,
         release_id=release_id,
+        preflight=preflight,
     )
     return plan, store.retain_plan(plan)
 
 
 def _plan_action(argv: Sequence[str], identifier: str) -> NextAction:
-    command = ("iii", *argv, "--operation-id", identifier, "--confirm", "--non-interactive")
+    command = (
+        "iii",
+        *argv,
+        "--operation-id",
+        identifier,
+        "--confirm",
+        "--non-interactive",
+    )
     return NextAction(
         command,
         "Apply this exact retained plan.",
@@ -384,17 +491,33 @@ def _plan_action(argv: Sequence[str], identifier: str) -> NextAction:
     )
 
 
-def _resume_action(argv: Sequence[str], identifier: str, *, target: str | None, profile: str | None) -> NextAction:
+def _resume_action(
+    argv: Sequence[str], identifier: str, *, target: str | None, profile: str | None
+) -> NextAction:
     return NextAction(
-        ("iii", *argv, "--operation-id", identifier, "--resume", "--confirm", "--non-interactive"),
+        (
+            "iii",
+            *argv,
+            "--operation-id",
+            identifier,
+            "--resume",
+            "--confirm",
+            "--non-interactive",
+        ),
         "Reattach to the exact retained operation without changing its plan.",
         mutating=True,
-        prerequisites=("Verify retained state and external side effects before resuming.",),
+        prerequisites=(
+            "Verify retained state and external side effects before resuming.",
+        ),
         confirmation_required=True,
         target=target,
         profile=profile,
         operation_id=identifier,
-        arguments={"operation_id": identifier, **({"target": target} if target else {}), **({"profile": profile} if profile else {})},
+        arguments={
+            "operation_id": identifier,
+            **({"target": target} if target else {}),
+            **({"profile": profile} if profile else {}),
+        },
     )
 
 
@@ -450,6 +573,12 @@ def invoke(
     try:
         if spec.mutating:
             identifier = identifier or new_operation_id()
+            try:
+                preflight = (
+                    spec.plan_provider(args) if spec.plan_provider is not None else None
+                )
+            except Exception as exc:
+                raise OperationError(f"operation preflight rejected: {exc}") from exc
             plan, state = _retained_plan(
                 store=store,
                 identifier=identifier,
@@ -458,87 +587,132 @@ def invoke(
                 target=target,
                 profile=profile,
                 release_id=release_id,
+                preflight=preflight,
             )
             if state.get("state") == "completed":
-                return CommandResult(
-                    command=spec.identity,
-                    outcome=Outcome.SUCCESS,
-                    summary="The retained operation is already complete; no mutation was repeated.",
-                    code="III_OPERATION_ALREADY_COMPLETE",
-                    operation_id=identifier,
-                    state="completed",
-                    target=target,
-                    profile=profile,
-                    release_id=release_id,
-                    evidence=tuple(state.get("evidence", [])),
-                    payload_schema="iii.cli-operation-plan/v1",
-                    payload={"plan": plan},
-                    next_actions=(_action_for(spec, target=target, profile=profile, operation_id=identifier),),
-                ), ""
-            if options.dry_run:
-                return CommandResult(
-                    command=spec.identity,
-                    outcome=Outcome.SUCCESS,
-                    summary="The exact operation plan is retained; no mutation was performed.",
-                    code="III_OPERATION_PLAN_READY",
-                    operation_id=identifier,
-                    state="planned",
-                    target=target,
-                    profile=profile,
-                    release_id=release_id,
-                    payload_schema="iii.cli-operation-plan/v1",
-                    payload={"plan": plan},
-                    next_actions=(_plan_action(argv, identifier),),
-                ), ""
-            action = _plan_action(argv, identifier)
-            if not options.confirm:
-                if options.non_interactive:
-                    return _required_input_result(
-                        spec,
-                        field="confirmation",
-                        detail="--confirm is required for this mutating operation",
-                        action=action,
-                        identifier=identifier,
-                        state="planned",
-                        target=target,
-                        profile=profile,
-                    ), ""
-                prompt_stream.write(f"Apply operation {identifier} for {spec.identity}? [y/N] ")
-                prompt_stream.flush()
-                answer = stdin.readline().strip().lower()
-                if answer not in {"y", "yes"}:
-                    store.transition(identifier, "cancelled", exit_code=130, result_code="III_OPERATION_CANCELLED")
-                    return CommandResult(
+                return (
+                    CommandResult(
                         command=spec.identity,
-                        outcome=Outcome.CANCELLED,
-                        summary="The operation was cancelled before mutation.",
-                        code="III_OPERATION_CANCELLED",
+                        outcome=Outcome.SUCCESS,
+                        summary="The retained operation is already complete; no mutation was repeated.",
+                        code="III_OPERATION_ALREADY_COMPLETE",
                         operation_id=identifier,
-                        state="cancelled",
+                        state="completed",
                         target=target,
                         profile=profile,
                         release_id=release_id,
-                        next_actions=(action,),
-                    ), ""
+                        evidence=tuple(state.get("evidence", [])),
+                        payload_schema="iii.cli-operation-plan/v1",
+                        payload={"plan": plan},
+                        next_actions=(
+                            _action_for(
+                                spec,
+                                target=target,
+                                profile=profile,
+                                operation_id=identifier,
+                            ),
+                        ),
+                    ),
+                    "",
+                )
+            if options.dry_run:
+                return (
+                    CommandResult(
+                        command=spec.identity,
+                        outcome=Outcome.SUCCESS,
+                        summary="The exact operation plan is retained; no mutation was performed.",
+                        code="III_OPERATION_PLAN_READY",
+                        operation_id=identifier,
+                        state="planned",
+                        target=target,
+                        profile=profile,
+                        release_id=release_id,
+                        payload_schema="iii.cli-operation-plan/v1",
+                        payload={"plan": plan},
+                        next_actions=(_plan_action(argv, identifier),),
+                    ),
+                    "",
+                )
+            action = _plan_action(argv, identifier)
+            if not options.confirm:
+                if options.non_interactive:
+                    return (
+                        _required_input_result(
+                            spec,
+                            field="confirmation",
+                            detail="--confirm is required for this mutating operation",
+                            action=action,
+                            identifier=identifier,
+                            state="planned",
+                            target=target,
+                            profile=profile,
+                        ),
+                        "",
+                    )
+                prompt_stream.write(
+                    f"Apply operation {identifier} for {spec.identity}? [y/N] "
+                )
+                prompt_stream.flush()
+                answer = stdin.readline().strip().lower()
+                if answer not in {"y", "yes"}:
+                    store.transition(
+                        identifier,
+                        "cancelled",
+                        exit_code=130,
+                        result_code="III_OPERATION_CANCELLED",
+                    )
+                    return (
+                        CommandResult(
+                            command=spec.identity,
+                            outcome=Outcome.CANCELLED,
+                            summary="The operation was cancelled before mutation.",
+                            code="III_OPERATION_CANCELLED",
+                            operation_id=identifier,
+                            state="cancelled",
+                            target=target,
+                            profile=profile,
+                            release_id=release_id,
+                            next_actions=(action,),
+                        ),
+                        "",
+                    )
             store.transition(identifier, "running", increment_attempt=True)
-        elif options.dry_run or options.confirm or options.resume or identifier is not None:
-            return CommandResult(
-                command=spec.identity,
-                outcome=Outcome.USAGE_ERROR,
-                summary="Operation controls were supplied to a read-only command.",
-                code="III_OPERATION_NOT_MUTATING",
-                findings=(Finding("III_OPERATION_NOT_MUTATING", "remove dry-run, confirmation, resume, and operation ID options", field="argv"),),
-                next_actions=(_help_action(spec.path),),
-            ), ""
+            setattr(args, "_iii_retained_plan", plan)
+        elif (
+            options.dry_run
+            or options.confirm
+            or options.resume
+            or identifier is not None
+        ):
+            return (
+                CommandResult(
+                    command=spec.identity,
+                    outcome=Outcome.USAGE_ERROR,
+                    summary="Operation controls were supplied to a read-only command.",
+                    code="III_OPERATION_NOT_MUTATING",
+                    findings=(
+                        Finding(
+                            "III_OPERATION_NOT_MUTATING",
+                            "remove dry-run, confirmation, resume, and operation ID options",
+                            field="argv",
+                        ),
+                    ),
+                    next_actions=(_help_action(spec.path),),
+                ),
+                "",
+            )
     except OperationError as exc:
-        return CommandResult(
-            command=spec.identity,
-            outcome=Outcome.REJECTED,
-            summary="The retained operation plan cannot be used.",
-            code=exc.code,
-            findings=(Finding(exc.code, str(exc), field="operation_id"),),
-            next_actions=(_help_action(spec.path),),
-        ), ""
+        return (
+            CommandResult(
+                command=spec.identity,
+                outcome=Outcome.REJECTED,
+                summary="The retained operation plan cannot be used.",
+                code=exc.code,
+                findings=(Finding(exc.code, str(exc), field="operation_id"),),
+                next_actions=(_help_action(spec.path),),
+            ),
+            "",
+        )
 
     stdout_buffer = StringIO()
     stderr_buffer = StringIO()
@@ -549,7 +723,9 @@ def invoke(
         # without bypassing the universal parser or result contract.
         setattr(args, "_iii_environment", env)
         setattr(args, "_iii_operation_id", identifier)
-        with _capture_child_stdout(stdout_buffer), _prompt_policy(options.non_interactive), redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+        with _capture_child_stdout(stdout_buffer), _prompt_policy(
+            options.non_interactive
+        ), redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
             returned = args.func(args)
     except SystemExit as exc:
         if isinstance(exc.code, int):
@@ -560,42 +736,77 @@ def invoke(
             exit_status = 30
             stderr_buffer.write(str(exc.code) + "\n")
     except RequiredInput as exc:
-        action = _resume_action(argv, identifier, target=target, profile=profile) if identifier else _help_action(spec.path)
+        action = (
+            _resume_action(argv, identifier, target=target, profile=profile)
+            if identifier
+            else _help_action(spec.path)
+        )
         if identifier:
-            store.transition(identifier, "rejected", exit_code=20, result_code="III_REQUIRED_INPUT")
-        return _required_input_result(
-            spec,
-            field=exc.field,
-            detail=exc.prompt,
-            action=action,
-            identifier=identifier,
-            state="rejected" if identifier else None,
-            target=target,
-            profile=profile,
-        ), stderr_buffer.getvalue()
+            store.transition(
+                identifier, "rejected", exit_code=20, result_code="III_REQUIRED_INPUT"
+            )
+        return (
+            _required_input_result(
+                spec,
+                field=exc.field,
+                detail=exc.prompt,
+                action=action,
+                identifier=identifier,
+                state="rejected" if identifier else None,
+                target=target,
+                profile=profile,
+            ),
+            stderr_buffer.getvalue(),
+        )
     except KeyboardInterrupt:
         if identifier:
-            store.transition(identifier, "interrupted", exit_code=130, result_code="III_OPERATION_INTERRUPTED")
-        return CommandResult(
-            command=spec.identity,
-            outcome=Outcome.INTERRUPTED,
-            summary="The client detached after the last durable operation checkpoint.",
-            code="III_OPERATION_INTERRUPTED",
-            operation_id=identifier,
-            state="interrupted" if identifier else None,
-            target=target,
-            profile=profile,
-            release_id=release_id,
-            payload_schema="iii.command-transcript/v1",
-            payload={"display": stdout_buffer.getvalue().rstrip()},
-            next_actions=((_resume_action(argv, identifier, target=target, profile=profile) if identifier else _help_action(spec.path)),),
-        ), stderr_buffer.getvalue()
+            store.transition(
+                identifier,
+                "interrupted",
+                exit_code=130,
+                result_code="III_OPERATION_INTERRUPTED",
+            )
+        return (
+            CommandResult(
+                command=spec.identity,
+                outcome=Outcome.INTERRUPTED,
+                summary="The client detached after the last durable operation checkpoint.",
+                code="III_OPERATION_INTERRUPTED",
+                operation_id=identifier,
+                state="interrupted" if identifier else None,
+                target=target,
+                profile=profile,
+                release_id=release_id,
+                payload_schema="iii.command-transcript/v1",
+                payload={"display": stdout_buffer.getvalue().rstrip()},
+                next_actions=(
+                    (
+                        _resume_action(argv, identifier, target=target, profile=profile)
+                        if identifier
+                        else _help_action(spec.path)
+                    ),
+                ),
+            ),
+            stderr_buffer.getvalue(),
+        )
     except BaseException as exc:
         result = internal_error_result(spec.identity, exc)
         if identifier:
-            store.transition(identifier, "failed", exit_code=result.exit_code, result_code=result.code)
+            store.transition(
+                identifier,
+                "failed",
+                exit_code=result.exit_code,
+                result_code=result.code,
+            )
             result = CommandResult(
-                **{**result.__dict__, "operation_id": identifier, "state": "failed", "target": target, "profile": profile, "release_id": release_id}
+                **{
+                    **result.__dict__,
+                    "operation_id": identifier,
+                    "state": "failed",
+                    "target": target,
+                    "profile": profile,
+                    "release_id": release_id,
+                }
             )
         return result, stderr_buffer.getvalue()
 
@@ -605,7 +816,11 @@ def invoke(
             result = replace(
                 result,
                 operation_id=identifier,
-                state=("completed" if result.outcome is Outcome.SUCCESS else result.outcome.value),
+                state=(
+                    "completed"
+                    if result.outcome is Outcome.SUCCESS
+                    else result.outcome.value
+                ),
                 target=result.target or target,
                 profile=result.profile or profile,
                 release_id=result.release_id or release_id,
@@ -620,19 +835,36 @@ def invoke(
         result = CommandResult(
             command=spec.identity,
             outcome=outcome,
-            summary=(f"{spec.identity} completed." if exit_status == 0 else f"{spec.identity} failed."),
+            summary=(
+                f"{spec.identity} completed."
+                if exit_status == 0
+                else f"{spec.identity} failed."
+            ),
             code=f"III_{code_stem}_{'COMPLETED' if exit_status == 0 else 'FAILED'}",
             findings=(
-                () if exit_status == 0 else (Finding(f"III_{code_stem}_FAILED", f"legacy handler exited with status {exit_status}"),)
+                ()
+                if exit_status == 0
+                else (
+                    Finding(
+                        f"III_{code_stem}_FAILED",
+                        f"legacy handler exited with status {exit_status}",
+                    ),
+                )
             ),
             operation_id=identifier,
-            state=("completed" if exit_status == 0 else "failed") if identifier else None,
+            state=(
+                ("completed" if exit_status == 0 else "failed") if identifier else None
+            ),
             target=target,
             profile=profile,
             release_id=release_id,
             payload_schema="iii.command-transcript/v1",
             payload={"display": stdout_buffer.getvalue().rstrip()},
-            next_actions=(_action_for(spec, target=target, profile=profile, operation_id=identifier),),
+            next_actions=(
+                _action_for(
+                    spec, target=target, profile=profile, operation_id=identifier
+                ),
+            ),
         )
     if identifier:
         state_name = {
@@ -646,11 +878,24 @@ def invoke(
             Outcome.USAGE_ERROR: "rejected",
             Outcome.INTERNAL_ERROR: "failed",
         }[result.outcome]
-        store.transition(identifier, state_name, exit_code=result.exit_code, result_code=result.code, evidence=result.evidence)
+        store.transition(
+            identifier,
+            state_name,
+            exit_code=result.exit_code,
+            result_code=result.code,
+            evidence=result.evidence,
+        )
     return result, stderr_buffer.getvalue()
 
 
-def render(result: CommandResult, *, output: str, stdout: TextIO, stderr: TextIO, diagnostics: str = "") -> int:
+def render(
+    result: CommandResult,
+    *,
+    output: str,
+    stdout: TextIO,
+    stderr: TextIO,
+    diagnostics: str = "",
+) -> int:
     if diagnostics:
         stderr.write(diagnostics)
         if not diagnostics.endswith("\n"):
