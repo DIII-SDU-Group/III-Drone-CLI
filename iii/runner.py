@@ -545,6 +545,10 @@ def invoke(
     exit_status = 0
     returned: Any = None
     try:
+        # Providers may use the exact environment and retained operation ID,
+        # without bypassing the universal parser or result contract.
+        setattr(args, "_iii_environment", env)
+        setattr(args, "_iii_operation_id", identifier)
         with _capture_child_stdout(stdout_buffer), _prompt_policy(options.non_interactive), redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
             returned = args.func(args)
     except SystemExit as exc:

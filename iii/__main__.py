@@ -48,6 +48,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser_deploy = subparsers.add_parser("deploy", help="Commands for deploying parts of the system")
     deploy.initialize(parser_deploy)
 
+    release = import_module("iii.release")
+    parser_release = subparsers.add_parser("release", help="Commands for qualified releases")
+    release.initialize(parser_release)
+
     inventory_parser(parser)
     return parser
 

@@ -8,15 +8,9 @@ from pathlib import Path
 import subprocess
 import time
 
-CLI_CONFIGURATION = os.getenv("CLI_CONFIGURATION")
-
-if CLI_CONFIGURATION == "host":
-    from .container_manager import ContainerManager
-elif CLI_CONFIGURATION == "remote":
-    from .runtime_api_client import RuntimeApiClient, RuntimeApiError
-else:
-    from .system_client import DaemonClient
-    from .tmux_handler import TmuxHandler
+from .runtime_api_client import RuntimeApiClient, RuntimeApiError
+from .system_client import DaemonClient
+from .tmux_handler import TmuxHandler
 
 
 RUNTIME_BOOT = "runtime.boot"
@@ -32,6 +26,12 @@ RUNTIME_SERVICE_STOP = "runtime.service.stop"
 RUNTIME_SERVICE_RESTART = "runtime.service.restart"
 
 
+def _configuration() -> str | None:
+    """Return the active execution boundary without caching process state."""
+
+    return os.getenv("CLI_CONFIGURATION")
+
+
 def _profile_name() -> str:
     return os.environ.get("III_SYSTEM_PROFILE", "sim")
 
@@ -45,6 +45,10 @@ def _local_client() -> "DaemonClient":
 
 
 def _host_forward(command: str, args: list[str]) -> bool:
+    # Docker is an optional dependency outside the host wrapper. Keep it lazy so
+    # local and remote CLI invocations do not require the Docker SDK.
+    from .container_manager import ContainerManager
+
     container_manager = ContainerManager()
     return container_manager.execute_cli(command, args)
 
@@ -270,7 +274,7 @@ def _print_status_result(result: dict) -> None:
 
 
 def start(args):
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system start",
             _filter_args(
@@ -283,7 +287,7 @@ def start(args):
             ),
         )
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         response = _remote_command(
             RUNTIME_START,
             {
@@ -322,7 +326,7 @@ def start(args):
 
 
 def stop(args):
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system stop",
             _filter_args(
@@ -335,7 +339,7 @@ def stop(args):
             ),
         )
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         response = _remote_command(
             RUNTIME_STOP,
             {
@@ -366,7 +370,7 @@ def stop(args):
 
 
 def restart(args):
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system restart",
             _filter_args(
@@ -379,7 +383,7 @@ def restart(args):
             ),
         )
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         response = _remote_command(
             RUNTIME_RESTART,
             {
@@ -415,13 +419,13 @@ def restart(args):
 
 
 def status(args):
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system status",
             _filter_args(["--watch" if args.watch else ""]),
         )
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         while True:
             response = _remote_command(RUNTIME_STATUS)
             if not response.get("accepted"):
@@ -448,7 +452,7 @@ def status(args):
 
 
 def shutdown(args):
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system shutdown",
             _filter_args(
@@ -461,7 +465,7 @@ def shutdown(args):
             ),
         )
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         response = _remote_command(
             RUNTIME_SHUTDOWN,
             {
@@ -501,13 +505,13 @@ def shutdown(args):
 
 
 def boot(args):
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward(
             "/home/iii/.local/bin/iii system boot",
             _filter_args(["--attach" if args.attach else ""]),
         )
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         response = _remote_command(RUNTIME_BOOT, {"profile": _profile_name()})
         message = "System boot request accepted."
         if args.attach:
@@ -535,10 +539,10 @@ def boot(args):
 
 def attach(args):
     del args
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward("/home/iii/.local/bin/iii system attach", [])
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         print("Remote tmux attach is no longer forwarded through runtime-control commands. Use an explicit SSH workflow.")
         exit(1)
 
@@ -548,10 +552,10 @@ def attach(args):
 
 def list_nodes(args):
     del args
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward("/home/iii/.local/bin/iii system list-nodes", [])
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         response = _remote_command(RUNTIME_LIST_ENTITIES)
         if not response.get("accepted"):
             _print_remote_rejection(response)
@@ -571,10 +575,10 @@ def list_nodes(args):
 
 def list_services(args):
     del args
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward("/home/iii/.local/bin/iii system list-services", [])
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         response = _remote_command(RUNTIME_LIST_SERVICES)
         if not response.get("accepted"):
             _print_remote_rejection(response)
@@ -593,13 +597,13 @@ def list_services(args):
 
 
 def service(args):
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         forwarded_args = [args.service_action]
         if getattr(args, "service_id", None):
             forwarded_args.append(args.service_id)
         success = _host_forward("/home/iii/.local/bin/iii system service", forwarded_args)
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         if args.service_action == "list":
             list_services(args)
         command_id = {
@@ -656,13 +660,13 @@ def service(args):
 def daemon(args):
     service_name = _systemd_service_name()
 
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         forwarded_args = [args.daemon_action]
         if getattr(args, "follow", False):
             forwarded_args.append("--follow")
         success = _host_forward("/home/iii/.local/bin/iii system daemon", forwarded_args)
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         print("Remote daemon systemd control is not forwarded over SSH. Use the runtime API service locally or an explicit SSH workflow.")
         exit(1)
 
@@ -685,10 +689,10 @@ def daemon(args):
 
 def kill_session(args):
     del args
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward("/home/iii/.local/bin/iii system kill-session", [])
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         print("Remote tmux session control is not forwarded through runtime-control commands. Use an explicit SSH workflow.")
         exit(1)
 
@@ -700,7 +704,7 @@ def logs(args):
     follow = getattr(args, "follow", False)
     history = getattr(args, "history", False)
     lines = getattr(args, "lines", 200)
-    if CLI_CONFIGURATION == "host":
+    if _configuration() == "host":
         success = _host_forward(
             f"/home/iii/.local/bin/iii system logs {args.entity_id}",
             _filter_args([
@@ -711,7 +715,7 @@ def logs(args):
             ]),
         )
         exit(0 if success else 1)
-    if CLI_CONFIGURATION == "remote":
+    if _configuration() == "remote":
         seen = 0
         while True:
             response = _remote_log_tail(args.entity_id, lines=lines)

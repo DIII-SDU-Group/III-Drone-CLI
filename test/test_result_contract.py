@@ -177,7 +177,7 @@ def test_every_existing_parser_leaf_is_inventory_covered():
     assert inventory
     assert all(path and spec.path == path for path, spec in inventory.items())
     assert all(spec.identity.startswith("iii ") for spec in inventory.values())
-    assert {path[0] for path in inventory} == {"system", "build", "deploy", "config"}
+    assert {path[0] for path in inventory} == {"system", "build", "deploy", "config", "release"}
     # Future providers must select from this declared universal contract surface.
     assert {
         "system", "build", "deploy", "release", "host", "gc", "qgc", "px4",
