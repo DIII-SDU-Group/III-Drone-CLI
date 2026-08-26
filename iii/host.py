@@ -396,6 +396,9 @@ def _image_common(parser: argparse.ArgumentParser) -> None:
 
 def initialize(parser: argparse.ArgumentParser) -> None:
     commands = parser.add_subparsers(dest="host_command")
+    from . import host_maintenance
+
+    host_maintenance.initialize(commands)
     image = commands.add_parser(
         "image", help="inspect or write Raspberry Pi removable media"
     )
