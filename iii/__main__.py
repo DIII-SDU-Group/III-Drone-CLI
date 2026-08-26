@@ -80,6 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     logs.initialize(parser_logs)
 
+    records = import_module("iii.records")
+    parser_records = subparsers.add_parser(
+        "records", help="Commands for local records and portable archives"
+    )
+    records.initialize(parser_records)
+
     inventory_parser(parser)
     return parser
 

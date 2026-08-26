@@ -18,6 +18,7 @@ class Cached:
     notes: dict
     record: dict
     status: dict
+    status_index: dict
 
 
 def _cached(tmp_path: Path, status: str = "qualified") -> Cached:
@@ -27,6 +28,7 @@ def _cached(tmp_path: Path, status: str = "qualified") -> Cached:
         {"markdown": "# v1.2.3 deployment notes\n"},
         {"record_id": "release-record-id", "source_commit": "a" * 40},
         {"status": status, "reason": "verified", "statement_id": f"statement-{status}"},
+        {"index_id": "c" * 64, "schema": "iii.release-status-index/v1"},
     )
 
 
@@ -81,6 +83,7 @@ def test_list_and_show_use_canonical_verified_payload(monkeypatch, tmp_path):
 
 
 def test_fetch_and_cache_report_verified_identity(monkeypatch, tmp_path):
+    monkeypatch.setenv("III_REGISTRY_ROOT", str(tmp_path / "registry"))
     runtime = _runtime(tmp_path)
     monkeypatch.setattr(release, "_runtime", lambda _args: runtime)
     monkeypatch.setattr(release, "_cached_root", lambda *_args: tmp_path / "cached")
@@ -89,6 +92,17 @@ def test_fetch_and_cache_report_verified_identity(monkeypatch, tmp_path):
     assert fetched.code == "III_RELEASE_FETCHED"
     assert cached.code == "III_RELEASE_CACHE_VERIFIED"
     assert "publication-id" in fetched.evidence
+    assert (tmp_path / "registry/status-indexes" / ("c" * 64 + ".json")).is_file()
+    assert (tmp_path / "registry/release-evidence/release-record-id.json").is_file()
+
+
+def test_default_release_cache_is_inside_the_portable_registry(tmp_path):
+    args = _args(
+        schema_root=Path(__file__).resolve().parents[3] / "deployment/schemas/v1",
+        policy=Path(__file__).resolve().parents[3] / "deployment/operational-policy.json",
+    )
+    args._iii_environment = {"III_REGISTRY_ROOT": str(tmp_path / "registry")}
+    assert release._paths(args)["cache"] == tmp_path / "registry/cache/releases"
 
 
 def test_verify_checks_remote_or_explicit_offline_cache(monkeypatch, tmp_path):
@@ -104,6 +118,7 @@ def test_verify_checks_remote_or_explicit_offline_cache(monkeypatch, tmp_path):
 
 
 def test_online_deploy_refreshes_status_before_materialising(monkeypatch, tmp_path):
+    monkeypatch.setenv("III_REGISTRY_ROOT", str(tmp_path / "registry"))
     calls = []
     cached = _cached(tmp_path)
     runtime = _runtime(tmp_path, cached)
@@ -118,6 +133,7 @@ def test_online_deploy_refreshes_status_before_materialising(monkeypatch, tmp_pa
 
 
 def test_offline_deploy_is_explicit_and_does_not_hide_cached_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("III_REGISTRY_ROOT", str(tmp_path / "registry"))
     calls = []
     cached = _cached(tmp_path)
     runtime = _runtime(tmp_path, cached)

@@ -12,6 +12,7 @@ import shutil
 from typing import Any, Mapping, Sequence
 
 from .operation import OperationStore, content_id, default_state_root
+from .registry import registry_root
 from .result import CommandResult, Finding, NextAction, Outcome
 
 
@@ -28,13 +29,7 @@ def _workspace() -> Path:
 
 
 def _registry_root(args: argparse.Namespace) -> Path:
-    env = _environment(args)
-    if env.get("III_REGISTRY_ROOT"):
-        return Path(env["III_REGISTRY_ROOT"]).expanduser()
-    if env.get("WORKSPACE_DIR"):
-        return Path(env["WORKSPACE_DIR"]).expanduser() / ".iii"
-    state = Path(env.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
-    return state.expanduser() / "iii"
+    return registry_root(_environment(args))
 
 
 def _target(args: argparse.Namespace) -> dict[str, Any]:

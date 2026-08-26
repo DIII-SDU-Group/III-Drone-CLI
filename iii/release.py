@@ -16,6 +16,7 @@ import subprocess
 import sys
 from typing import Any, Mapping
 
+from .registry import registry_root
 from .result import CommandResult, Finding, NextAction, Outcome
 
 
@@ -26,6 +27,22 @@ DEFAULT_STATUS_TRUST = Path("/etc/iii-deployment/release-status-trusted-signers.
 
 def _environment(args: argparse.Namespace) -> Mapping[str, str]:
     return getattr(args, "_iii_environment", os.environ)
+
+
+def _retain_cache_evidence(args: argparse.Namespace, cached: Any) -> tuple[Path, Path]:
+    from .registry import atomic_json, registry_lock
+
+    status = cached.status_index
+    record = cached.record
+    root = registry_root(_environment(args))
+    with registry_lock(root):
+        status_path = atomic_json(
+            root, f"status-indexes/{status['index_id']}.json", status
+        )
+        evidence_path = atomic_json(
+            root, f"release-evidence/{record['record_id']}.json", record
+        )
+    return status_path, evidence_path
 
 
 def _first_existing(candidates: list[Path], *, label: str) -> Path:
@@ -75,11 +92,12 @@ def _paths(args: argparse.Namespace) -> dict[str, Path]:
         args.status_trusted_signers
         or env.get("III_RELEASE_STATUS_TRUSTED_SIGNERS", str(DEFAULT_STATUS_TRUST))
     )
-    cache = Path(args.cache_root) if args.cache_root else Path(
-        env.get(
-            "III_RELEASE_CACHE",
-            str(Path(env.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "iii/releases"),
-        )
+    cache = (
+        Path(args.cache_root)
+        if args.cache_root
+        else Path(env["III_RELEASE_CACHE"])
+        if env.get("III_RELEASE_CACHE")
+        else registry_root(env) / "cache/releases"
     )
     return {
         "schema": schema,
@@ -232,6 +250,7 @@ def fetch(args: argparse.Namespace) -> CommandResult:
             host_limits=runtime["limits"],
             fetched_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         )
+        status_path, evidence_path = _retain_cache_evidence(args, cached)
     except Exception as exc:
         return _rejected("iii release fetch", args.version, exc)
     return CommandResult(
@@ -240,7 +259,7 @@ def fetch(args: argparse.Namespace) -> CommandResult:
         summary=f"Fetched and verified qualified release {args.version}.",
         code="III_RELEASE_FETCHED",
         release_id=cached.publication["release_id"],
-        evidence=(str(cached.root), cached.publication["publication_id"], cached.status["statement_id"]),
+        evidence=(str(cached.root), str(status_path), str(evidence_path), cached.publication["publication_id"], cached.status["statement_id"]),
         terminal_reason="The complete signed release is atomically cached and ready for offline use.",
         payload_schema="iii.release-cache/v1",
         payload={"version": args.version, "cache": str(cached.root), "status": cached.status},
@@ -315,6 +334,7 @@ def deploy(args: argparse.Namespace) -> CommandResult:
                 registry=runtime["registry"],
             )
             cached = _load_cached(runtime, args.version)
+        status_path, evidence_path = _retain_cache_evidence(args, cached)
         destination = runtime["materialize_cached_release"](
             cached,
             Path(args.destination),
@@ -330,7 +350,7 @@ def deploy(args: argparse.Namespace) -> CommandResult:
         summary=f"Materialized verified release {args.version} for deployment handoff.",
         code="III_RELEASE_HANDOFF_READY",
         release_id=cached.publication["release_id"],
-        evidence=(str(destination), cached.publication["publication_id"], cached.status["statement_id"]),
+        evidence=(str(destination), str(status_path), str(evidence_path), cached.publication["publication_id"], cached.status["statement_id"]),
         terminal_reason=("The explicitly offline cached release was materialized; no remote status refresh was possible." if args.offline else "The current signed status was refreshed before atomic local materialization."),
         payload_schema="iii.release-handoff/v1",
         payload={"version": args.version, "destination": str(destination), "status": cached.status, "offline": args.offline},

@@ -26,6 +26,16 @@ def _workspace() -> Path:
     raise ValueError("the III workspace root could not be located")
 
 
+def _retain_readiness(
+    args: argparse.Namespace, identity: str, value: Mapping[str, Any]
+) -> Path:
+    from .registry import atomic_json, registry_lock, registry_root
+
+    root = registry_root(_environment(args))
+    with registry_lock(root):
+        return atomic_json(root, f"readiness/{identity}.json", value)
+
+
 def _target(args: argparse.Namespace) -> dict[str, Any]:
     from iii_deployment.contracts import ContractRegistry
     from iii_deployment.runtime_target import (
@@ -137,6 +147,7 @@ def prepare(args: argparse.Namespace) -> CommandResult:
                     "cache_root": str(cached.root),
                 }
             )
+            release_cli._retain_cache_evidence(args, cached)
         report = field_cache_report(rows)
         if not report["complete"]:
             raise ValueError(
@@ -151,6 +162,7 @@ def prepare(args: argparse.Namespace) -> CommandResult:
         path = OperationStore(default_state_root(_environment(args))).write_record(
             identifier, "field-prepare.json", report
         )
+        readiness_path = _retain_readiness(args, report["cache_id"], report)
     except Exception as exc:
         return _reject("iii field prepare", exc, target=selected)
     outcome = Outcome.WARNING if report["warnings"] else Outcome.SUCCESS
@@ -172,6 +184,7 @@ def prepare(args: argparse.Namespace) -> CommandResult:
         release_id=rows[-1]["release_id"],
         evidence=(
             str(path),
+            str(readiness_path),
             report["cache_id"],
             *(row["status_statement_id"] for row in rows),
         ),
@@ -254,6 +267,7 @@ def _live_observations(
 def check(args: argparse.Namespace) -> CommandResult:
     from iii_deployment.contracts import content_identity
     from iii_deployment.field import evaluate_readiness, sign_readiness
+    from .registry import archive_coverage, registry_root
 
     selected = None
     try:
@@ -262,18 +276,30 @@ def check(args: argparse.Namespace) -> CommandResult:
             raise ValueError(
                 "connected field readiness is bound to the real aircraft target"
             )
+        policy = json.loads(
+            (_workspace() / "deployment/operational-policy.json").read_text(
+                encoding="utf-8"
+            )
+        )
         observations = (
             _load_state(args.state)
             if args.state
             else _live_observations(args, selected)
         )
-        policy_hash = content_identity(
-            json.loads(
-                (_workspace() / "deployment/operational-policy.json").read_text(
-                    encoding="utf-8"
-                )
-            )
+        coverage = archive_coverage(
+            registry_root(_environment(args)),
+            warning_days=policy["backup"]["external_archive_warning_days"],
         )
+        observations = {
+            **observations,
+            "external_archive_recent": (
+                observations.get("external_archive_recent", coverage["recent"])
+                if args.state
+                else coverage["recent"]
+            ),
+            "record_archive_coverage": coverage,
+        }
+        policy_hash = content_identity(policy)
         record = evaluate_readiness(
             observations,
             target={
@@ -296,6 +322,7 @@ def check(args: argparse.Namespace) -> CommandResult:
         path = OperationStore(default_state_root(_environment(args))).write_record(
             identifier, "field-readiness.json", record
         )
+        readiness_path = _retain_readiness(args, record["record_id"], record)
     except Exception as exc:
         return _reject("iii field check", exc, target=selected)
     severity = record["overall"]
@@ -323,7 +350,7 @@ def check(args: argparse.Namespace) -> CommandResult:
         target=selected["endpoint"],
         profile=selected["runtime_profile"],
         release_id=record["identity"]["drone_release_id"],
-        evidence=(str(path), record["record_id"]),
+        evidence=(str(path), str(readiness_path), record["record_id"]),
         payload_schema=record["schema"],
         payload={**record, "record_path": str(path)},
         terminal_reason="The sealed record is evidence only and never authorizes or arms a later operation.",
@@ -351,6 +378,9 @@ def acknowledge(args: argparse.Namespace) -> CommandResult:
         path = OperationStore(default_state_root(_environment(args))).write_record(
             identifier, "field-acknowledgement.json", acknowledgement
         )
+        readiness_path = _retain_readiness(
+            args, acknowledgement["acknowledgement_id"], acknowledgement
+        )
     except Exception as exc:
         return _reject("iii field acknowledge", exc)
     return CommandResult(
@@ -358,7 +388,11 @@ def acknowledge(args: argparse.Namespace) -> CommandResult:
         outcome=Outcome.SUCCESS,
         summary=f"Signed acknowledgement for {len(acknowledgement['warning_ids'])} warning(s).",
         code="III_FIELD_WARNINGS_ACKNOWLEDGED",
-        evidence=(str(path), acknowledgement["acknowledgement_id"]),
+        evidence=(
+            str(path),
+            str(readiness_path),
+            acknowledgement["acknowledgement_id"],
+        ),
         payload_schema=acknowledgement["schema"],
         payload=acknowledgement,
         terminal_reason="Warning severities are unchanged and the acknowledgement grants no authorization.",

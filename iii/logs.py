@@ -13,6 +13,7 @@ import stat
 from typing import Any, Mapping
 
 from .operation import OperationStore, content_id, default_state_root
+from .registry import registry_root
 from .result import CommandResult, Finding, NextAction, Outcome
 
 CHUNK_BYTES = 512 * 1024
@@ -23,15 +24,7 @@ def _environment(args: argparse.Namespace) -> Mapping[str, str]:
 
 
 def _registry_root(args: argparse.Namespace) -> Path:
-    environment = _environment(args)
-    if environment.get("III_REGISTRY_ROOT"):
-        return Path(environment["III_REGISTRY_ROOT"]).expanduser()
-    if environment.get("WORKSPACE_DIR"):
-        return Path(environment["WORKSPACE_DIR"]).expanduser() / ".iii"
-    base = Path(
-        environment.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))
-    ).expanduser()
-    return base / "iii"
+    return registry_root(_environment(args))
 
 
 def _destination(args: argparse.Namespace, domain: str) -> Path:

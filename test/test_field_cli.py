@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from iii import field, release
+from iii import field, registry, release
 
 
 RELEASE_ID = "a" * 64
@@ -26,6 +26,7 @@ def cached(tmp_path: Path, *, status: str = "qualified"):
             "release_id": RELEASE_ID,
             "components": {"drone": {}, "gc": {}},
         },
+        record={"record_id": "e" * 64, "schema": "iii.release-record/v1"},
         status={
             "status": status,
             "statement_id": "b" * 64,
@@ -43,7 +44,10 @@ def prepare_args(tmp_path: Path, *, offline=False):
         version=["v1.2.3"],
         offline=offline,
         _iii_operation_id="iii-field-prepare-test",
-        _iii_environment={"III_OPERATION_STATE_DIR": str(tmp_path / "operations")},
+        _iii_environment={
+            "III_OPERATION_STATE_DIR": str(tmp_path / "operations"),
+            "III_REGISTRY_ROOT": str(tmp_path / "registry"),
+        },
     )
 
 
@@ -68,6 +72,7 @@ def test_online_prepare_refreshes_monotonic_status_and_seals_completeness(
     assert calls == ["online", "refresh"]
     assert result.payload["complete"] is True
     assert Path(result.evidence[0]).is_file()
+    assert Path(result.evidence[1]).is_file()
 
 
 def test_offline_prepare_never_refreshes_and_withdrawal_cannot_become_deployable(
@@ -154,15 +159,19 @@ def observations(**changes):
     return value
 
 
-def check_args(tmp_path: Path, state: dict):
+def check_args(tmp_path: Path, state: dict, *, registry_root: Path | None = None):
     tmp_path.mkdir(parents=True, exist_ok=True)
     path = tmp_path / "state.json"
     path.write_text(json.dumps(state), encoding="utf-8")
+    environment = {
+        "III_OPERATION_STATE_DIR": str(tmp_path / "operations"),
+        "III_REGISTRY_ROOT": str(registry_root or tmp_path / "registry"),
+    }
     return SimpleNamespace(
         target="real",
         state=path,
         signing_key=None,
-        _iii_environment={"III_OPERATION_STATE_DIR": str(tmp_path / "operations")},
+        _iii_environment=environment,
     )
 
 
@@ -178,4 +187,32 @@ def test_check_exit_families_and_sealed_records(monkeypatch, tmp_path):
     assert (passed.exit_code, warned.exit_code, failed.exit_code) == (0, 10, 30)
     assert passed.state == warned.state == failed.state == "sealed"
     assert Path(failed.evidence[0]).is_file()
+    assert Path(failed.evidence[1]).is_file()
     assert failed.payload["authorization"] is False
+
+
+def test_check_reports_verified_external_archive_coverage(monkeypatch, tmp_path):
+    monkeypatch.setattr(field, "_target", lambda _args: target())
+    local = tmp_path / "registry"
+    record = local / "captures/flight-1.json"
+    record.parent.mkdir(parents=True)
+    record.write_bytes(
+        registry.canonical_json(
+            {"schema": "iii.capture/v1", "creation_source": "iii capture"}
+        )
+        + b"\n"
+    )
+    archive = tmp_path / "external/records.tar"
+    registry.apply_archive_plan(
+        local, registry.build_archive_plan(local, destination=archive)
+    )
+    state = observations()
+    state.pop("external_archive_recent")
+    result = field.check(check_args(tmp_path / "check", state, registry_root=local))
+    coverage = result.payload["observations"]["record_archive_coverage"]
+    assert result.exit_code == 0
+    assert result.payload["observations"]["external_archive_recent"] is True
+    assert coverage["complete"] is True
+    assert coverage["age_days"] >= 0
+    assert coverage["archive_id"]
+    assert coverage["archive_available"] is True
