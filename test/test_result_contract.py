@@ -224,6 +224,7 @@ def test_every_existing_parser_leaf_is_inventory_covered():
         "release",
         "mission",
         "field",
+        "logs",
     }
     # Future providers must select from this declared universal contract surface.
     assert {
@@ -238,7 +239,7 @@ def test_every_existing_parser_leaf_is_inventory_covered():
         "mission",
         "config",
         "capture",
-        "log",
+        "logs",
         "records",
         "governance",
         "field",

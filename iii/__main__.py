@@ -74,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     field.initialize(parser_field)
 
+    logs = import_module("iii.logs")
+    parser_logs = subparsers.add_parser(
+        "logs", help="Commands for verified aircraft log lifecycle management"
+    )
+    logs.initialize(parser_logs)
+
     inventory_parser(parser)
     return parser
 

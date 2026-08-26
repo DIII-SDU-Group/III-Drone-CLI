@@ -24,7 +24,6 @@ from .operation import (
 )
 from .result import CommandResult, Finding, NextAction, Outcome, internal_error_result
 
-
 SUPPORTED_CONFIGURATIONS = {"host", "container", "remote", "dev"}
 REQUIRED_COMMAND_FAMILIES = {
     "system",
@@ -38,7 +37,7 @@ REQUIRED_COMMAND_FAMILIES = {
     "mission",
     "config",
     "capture",
-    "log",
+    "logs",
     "records",
     "governance",
     "field",
@@ -568,11 +567,13 @@ def invoke(
 
     store = OperationStore(default_state_root(env))
     identifier = options.operation_id
+    setattr(args, "_iii_environment", env)
     plan: dict[str, Any] | None = None
     state: dict[str, Any] | None = None
     try:
         if spec.mutating:
             identifier = identifier or new_operation_id()
+            setattr(args, "_iii_operation_id", identifier)
             try:
                 preflight = (
                     spec.plan_provider(args) if spec.plan_provider is not None else None

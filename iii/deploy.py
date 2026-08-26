@@ -1125,6 +1125,8 @@ def _target_option(
 
 
 def initialize(parser: argparse.ArgumentParser) -> None:
+    from . import logs
+
     subparsers = parser.add_subparsers(dest="deploy_command")
 
     status_parser = subparsers.add_parser(
@@ -1202,6 +1204,22 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     )
     _target_option(capture_parser, default="real")
     capture_parser.set_defaults(func=configuration_capture, _iii_mutating=False)
+
+    diagnostics = subparsers.add_parser(
+        "diagnostics", help="pull immutable deployment activation diagnostics"
+    )
+    diagnostic_commands = diagnostics.add_subparsers(dest="diagnostics_command")
+    diagnostics_pull = diagnostic_commands.add_parser(
+        "pull", help="verify and retain deployment diagnostics locally"
+    )
+    diagnostics_pull.add_argument("--destination", type=Path)
+    _target_option(diagnostics_pull, default="real")
+    diagnostics_pull.set_defaults(
+        func=logs.pull,
+        log_domain="diagnostics",
+        _iii_mutating=True,
+        _iii_plan_provider=logs.pull_preflight,
+    )
 
     operations = subparsers.add_parser(
         "operations", help="inspect or explicitly prune compact deployment records"
