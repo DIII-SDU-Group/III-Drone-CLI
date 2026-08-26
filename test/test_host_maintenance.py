@@ -15,6 +15,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         target="real",
         offline=False,
         backup_record=tmp_path / "backup.json",
+        boot_profile=None,
         trust_store=tmp_path / "trust.json",
         release_status_index=tmp_path / "index.json",
         retire_signer=["a" * 64],
@@ -67,6 +68,36 @@ def test_check_preserves_every_rotation_input_in_universal_next_action(
         "--policy",
     ):
         assert option in command
+
+
+def test_boot_maintenance_parser_and_next_action_preserve_exact_profile(
+    tmp_path: Path,
+) -> None:
+    profile = tmp_path / "boot-profile.json"
+    parsed = build_parser().parse_args(
+        [
+            "host",
+            "maintenance",
+            "check",
+            "--kind",
+            "boot-settings",
+            "--boot-profile",
+            str(profile),
+        ]
+    )
+    assert parsed.kind == "boot-settings"
+    assert parsed.boot_profile == profile
+
+    args = _args(tmp_path)
+    args.kind = "boot-settings"
+    args.boot_profile = profile
+    args.trust_store = None
+    args.release_status_index = None
+    args.retire_signer = []
+    args.replacement_proof = []
+    command = host_maintenance._apply_command(args)
+    index = command.index("--boot-profile")
+    assert command[index + 1] == str(profile)
 
 
 def test_apply_uses_only_exact_retained_receiver_plan(

@@ -38,12 +38,12 @@ def _workspace_candidate(relative: str) -> Path:
     return current / relative
 
 
-def _paths(args: argparse.Namespace) -> dict[str, Path]:
+def _schema_root(args: argparse.Namespace) -> Path:
     env = _environment(args)
     prefix = Path(sys.prefix)
-    schema = (
+    return (
         Path(args.schema_root)
-        if args.schema_root
+        if getattr(args, "schema_root", None)
         else _first_existing(
             [
                 (
@@ -59,6 +59,11 @@ def _paths(args: argparse.Namespace) -> dict[str, Path]:
             label="deployment schema root",
         )
     )
+
+
+def _paths(args: argparse.Namespace) -> dict[str, Path]:
+    prefix = Path(sys.prefix)
+    schema = _schema_root(args)
     source = _first_existing(
         [
             prefix / "share/iii-deployment/provisioning/ubuntu-raspi-image.json",
@@ -155,7 +160,6 @@ def _validate_hardware_report(
     from iii_deployment.contracts import content_identity
     from iii_deployment.hardware_roles import load_manifest
 
-    paths = _paths(args)
     manifest_path = _first_existing(
         [
             Path(sys.prefix)
@@ -174,7 +178,7 @@ def _validate_hardware_report(
     )
     from iii_deployment.contracts import ContractRegistry
 
-    registry = ContractRegistry(paths["schema"])
+    registry = ContractRegistry(_schema_root(args))
     registry.validate("hardware-inspection", report)
     if report["inspection_id"] != content_identity(
         {key: item for key, item in report.items() if key != "inspection_id"}
@@ -189,18 +193,75 @@ def _validate_hardware_report(
         )
 
 
+def _validate_boot_report(
+    args: argparse.Namespace,
+    report: Mapping[str, Any],
+) -> None:
+    from iii_deployment.boot_baseline import load_boot_profile
+    from iii_deployment.contracts import ContractRegistry, content_identity
+
+    profile_path = _first_existing(
+        [
+            Path(sys.prefix)
+            / "share/iii-deployment/boot/raspberry-pi-5-noble-arm64.json",
+            Path(
+                "/usr/local/share/iii-deployment/boot/raspberry-pi-5-noble-arm64.json"
+            ),
+            Path("/usr/share/iii-deployment/boot/raspberry-pi-5-noble-arm64.json"),
+            _workspace_candidate("deployment/boot/raspberry-pi-5-noble-arm64.json"),
+        ],
+        label="Raspberry Pi boot profile",
+    )
+    registry = ContractRegistry(_schema_root(args))
+    registry.validate("boot-inspection", report)
+    if report["inspection_id"] != content_identity(
+        {key: item for key, item in report.items() if key != "inspection_id"}
+    ):
+        raise ValueError("receiver boot inspection identity mismatch")
+    profile = load_boot_profile(profile_path, registry)
+    if report["profile_id"] != profile["profile_id"]:
+        raise ValueError("receiver boot profile differs from trusted local policy")
+
+
+def _validate_host_report(
+    args: argparse.Namespace,
+    report: Mapping[str, Any],
+    selected: Mapping[str, Any],
+) -> None:
+    from iii_deployment.contracts import ContractRegistry, content_identity
+
+    registry = ContractRegistry(_schema_root(args))
+    registry.validate("host-inspection", report)
+    if report["inspection_id"] != content_identity(
+        {key: item for key, item in report.items() if key != "inspection_id"}
+    ):
+        raise ValueError("receiver host inspection identity mismatch")
+    if (
+        report["logical_target"] != selected["logical_id"]
+        or report["profile"] != selected["runtime_profile"]
+    ):
+        raise ValueError("receiver host report differs from selected target")
+    _validate_hardware_report(args, report["hardware"], selected)
+    _validate_boot_report(args, report["boot"])
+    if not (
+        report["boot_id"] == report["hardware"]["boot_id"] == report["boot"]["boot_id"]
+    ):
+        raise ValueError("receiver host report crosses a boot boundary")
+
+
 def hardware_inspect(args: argparse.Namespace) -> CommandResult:
     command = getattr(args, "_iii_hardware_command", "iii host inspect")
+    scope = getattr(args, "_iii_inspection_scope", "host")
     try:
         from .ssh_manager import SSHManager
 
         selected = _hardware_target(args)
         manager = SSHManager(environment=_environment(args))
-        operation_id = f"host-hardware-inspect-{uuid4().hex}"
+        operation_id = f"host-inspect-{uuid4().hex}"
         response = manager.receiver_request(
             {
                 "protocol_version": "1",
-                "action": "hardware-inspect",
+                "action": "hardware-inspect" if scope == "hardware" else "host-inspect",
                 "operation_id": operation_id,
                 "client_id": manager.client_id,
                 "payload": {},
@@ -209,16 +270,35 @@ def hardware_inspect(args: argparse.Namespace) -> CommandResult:
         )
         report = response.get("inspection")
         if not isinstance(report, dict):
-            raise ValueError("receiver hardware inspection result is malformed")
-        _validate_hardware_report(args, report, selected)
+            raise ValueError("receiver host inspection result is malformed")
+        if scope == "hardware":
+            _validate_hardware_report(args, report, selected)
+            hardware = report
+            boot = None
+        else:
+            _validate_host_report(args, report, selected)
+            hardware = report["hardware"]
+            boot = report["boot"]
         if args.capture is not None:
             _write_hardware_capture(args.capture, report)
     except Exception as exc:
-        code = getattr(exc, "code", "III_HARDWARE_INSPECTION_REJECTED")
+        code = getattr(
+            exc,
+            "code",
+            (
+                "III_HARDWARE_INSPECTION_REJECTED"
+                if scope == "hardware"
+                else "III_HOST_INSPECTION_REJECTED"
+            ),
+        )
         return CommandResult(
             command=command,
             outcome=Outcome.REJECTED,
-            summary="Hardware inspection was refused before any target or policy mutation.",
+            summary=(
+                "Hardware inspection was refused before any target or policy mutation."
+                if scope == "hardware"
+                else "Host inspection was refused before any target or policy mutation."
+            ),
             code=code,
             findings=(Finding(code, str(exc)),),
             next_actions=(
@@ -230,7 +310,7 @@ def hardware_inspect(args: argparse.Namespace) -> CommandResult:
             ),
         )
     findings = []
-    for role, evidence in report["roles"].items():
+    for role, evidence in hardware["roles"].items():
         if evidence["state"] != "present" or not evidence["stable_path_ok"]:
             severity = "error" if evidence["requirement"] == "required" else "warning"
             findings.append(
@@ -241,37 +321,67 @@ def hardware_inspect(args: argparse.Namespace) -> CommandResult:
                     field=role,
                 )
             )
-    if report["unmatched_device_ids"]:
+    if hardware["unmatched_device_ids"]:
         findings.append(
             Finding(
                 "III_HARDWARE_UNMATCHED",
-                f"{len(report['unmatched_device_ids'])} USB device(s) are outside the shared role contract.",
+                f"{len(hardware['unmatched_device_ids'])} USB device(s) are outside the shared role contract.",
                 severity="warning",
             )
+        )
+    if boot is not None:
+        findings.extend(
+            Finding(
+                "III_BOOT_BASELINE_DRIFT",
+                item,
+                severity="error",
+                field="boot",
+            )
+            for item in boot["drift"]
         )
     accepted = report["accepted"] is True
     return CommandResult(
         command=command,
         outcome=Outcome.SUCCESS if accepted else Outcome.WARNING,
         summary=(
-            "Shared aircraft hardware roles resolved without ambiguity."
+            (
+                "Aircraft hardware roles match trusted local policy."
+                if scope == "hardware"
+                else "Aircraft hardware and boot baselines match trusted local policy."
+            )
             if accepted
-            else "Aircraft hardware inspection found missing, ambiguous, or unstable required roles."
+            else (
+                "Aircraft hardware inspection found missing, ambiguous, or unstable roles."
+                if scope == "hardware"
+                else "Aircraft host inspection found hardware ambiguity or boot-policy drift."
+            )
         ),
-        code="III_HARDWARE_INSPECTED" if accepted else "III_HARDWARE_NOT_READY",
+        code=(
+            ("III_HARDWARE_INSPECTED" if accepted else "III_HARDWARE_NOT_READY")
+            if scope == "hardware"
+            else ("III_HOST_INSPECTED" if accepted else "III_HOST_NOT_READY")
+        ),
         findings=tuple(findings),
         target=str(selected["endpoint"]),
         profile=str(selected["runtime_profile"]),
-        evidence=(report["manifest_id"], report["inspection_id"]),
+        evidence=(
+            (hardware["manifest_id"], report["inspection_id"])
+            if scope == "hardware"
+            else (report["inspection_id"],)
+        ),
         payload_schema=report["schema"],
         payload=report,
         terminal_reason=(
             "The authenticated, read-only capture inspected only attached USB role evidence; it did not learn or change matching policy."
+            if scope == "hardware"
+            else "The authenticated read-only capture inspected only declared host evidence and did not change boot, hardware, or matching policy."
         ),
     )
 
 
-def _hardware_inspect_parser(parser: argparse.ArgumentParser, *, command: str) -> None:
+def _hardware_inspect_parser(
+    parser: argparse.ArgumentParser, *, command: str, scope: str
+) -> None:
     parser.add_argument("--target", choices=("real", "opti_track"), default="real")
     parser.add_argument(
         "--capture",
@@ -282,6 +392,7 @@ def _hardware_inspect_parser(parser: argparse.ArgumentParser, *, command: str) -
         func=hardware_inspect,
         _iii_mutating=False,
         _iii_hardware_command=command,
+        _iii_inspection_scope=scope,
     )
 
 
@@ -586,7 +697,7 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     inspect_parser = commands.add_parser(
         "inspect", help="inspect shared aircraft hardware roles without mutation"
     )
-    _hardware_inspect_parser(inspect_parser, command="iii host inspect")
+    _hardware_inspect_parser(inspect_parser, command="iii host inspect", scope="host")
 
     hardware = commands.add_parser(
         "hardware", help="shared attached-device role diagnostics"
@@ -596,7 +707,9 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "inspect", help="capture raw USB evidence and resolve declared roles"
     )
     _hardware_inspect_parser(
-        hardware_inspect_parser, command="iii host hardware inspect"
+        hardware_inspect_parser,
+        command="iii host hardware inspect",
+        scope="hardware",
     )
     image = commands.add_parser(
         "image", help="inspect or write Raspberry Pi removable media"

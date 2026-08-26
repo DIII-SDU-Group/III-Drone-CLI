@@ -38,6 +38,7 @@ def _args(tmp_path: Path, *, capture: bool = False) -> argparse.Namespace:
         target="real",
         capture=tmp_path / "hardware.json" if capture else None,
         _iii_hardware_command="iii host inspect",
+        _iii_inspection_scope="hardware",
         _iii_environment={},
     )
 
@@ -143,6 +144,7 @@ def test_missing_required_and_optional_roles_are_not_conflated(
     monkeypatch.setattr(host, "_validate_hardware_report", lambda *args: None)
     result = host.hardware_inspect(_args(tmp_path))
     assert result.outcome is Outcome.WARNING
+    assert result.code == "III_HARDWARE_NOT_READY"
     by_field = {finding.field: finding for finding in result.findings}
     assert by_field["cable_camera"].severity == "error"
     assert by_field["optional_debug_adapter"].severity == "warning"
@@ -180,3 +182,54 @@ def test_capture_never_overwrites_existing_evidence(
     result = host.hardware_inspect(args)
     assert result.outcome is Outcome.REJECTED
     assert capture.read_text(encoding="utf-8") == "preserve"
+
+
+def test_host_inspect_composes_hardware_and_boot_findings(monkeypatch, tmp_path: Path):
+    hardware = _report(accepted=True)
+    boot = {
+        "schema": "iii.boot-inspection/v1",
+        "inspection_id": "e" * 64,
+        "profile_id": "f" * 64,
+        "boot_id": "boot-a",
+        "accepted": False,
+        "drift": ["forbidden firmware setting force_turbo is active"],
+    }
+    report = {
+        "schema": "iii.host-inspection/v1",
+        "inspection_id": "1" * 64,
+        "logical_target": "drone",
+        "profile": "real",
+        "boot_id": "boot-a",
+        "accepted": False,
+        "hardware": hardware,
+        "boot": boot,
+    }
+
+    class Manager:
+        client_id = "d" * 64
+
+        def __init__(self, *, environment):
+            pass
+
+        def receiver_request(self, request):
+            assert request["action"] == "host-inspect"
+            return {"inspection": report}
+
+    monkeypatch.setattr(
+        host,
+        "_hardware_target",
+        lambda _args: {
+            "endpoint": "iii.local",
+            "execution_host": "aircraft",
+            "logical_id": "drone",
+            "runtime_profile": "real",
+        },
+    )
+    monkeypatch.setattr(host, "_validate_host_report", lambda *args: None)
+    monkeypatch.setattr("iii.ssh_manager.SSHManager", Manager)
+    args = _args(tmp_path)
+    args._iii_inspection_scope = "host"
+    result = host.hardware_inspect(args)
+    assert result.outcome is Outcome.WARNING
+    assert result.code == "III_HOST_NOT_READY"
+    assert any(finding.code == "III_BOOT_BASELINE_DRIFT" for finding in result.findings)

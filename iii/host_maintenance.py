@@ -94,6 +94,7 @@ def _maintenance_request(args: argparse.Namespace) -> dict[str, Any]:
         registry=_registry(),
         offline=args.offline,
         backup_record=args.backup_record,
+        boot_profile_path=getattr(args, "boot_profile", None),
         trust_store_path=args.trust_store,
         release_status_index_path=args.release_status_index,
         retire_signer_ids=args.retire_signer or (),
@@ -159,6 +160,7 @@ def _apply_command(args: argparse.Namespace) -> tuple[str, ...]:
     ]
     for option, value in (
         ("--backup-record", args.backup_record),
+        ("--boot-profile", getattr(args, "boot_profile", None)),
         ("--trust-store", args.trust_store),
         ("--release-status-index", args.release_status_index),
         ("--policy", args.policy),
@@ -434,12 +436,22 @@ def status(args: argparse.Namespace) -> CommandResult:
 def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--kind",
-        choices=("packages", "bundle-trust", "release-status-trust"),
+        choices=(
+            "packages",
+            "boot-settings",
+            "bundle-trust",
+            "release-status-trust",
+        ),
         required=True,
     )
     parser.add_argument("--target", choices=("real", "opti_track"), default="real")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--backup-record", type=Path)
+    parser.add_argument(
+        "--boot-profile",
+        type=Path,
+        help="exact content-identified Raspberry Pi boot profile",
+    )
     parser.add_argument("--trust-store", type=Path)
     parser.add_argument(
         "--release-status-index",
