@@ -189,3 +189,98 @@ def test_host_image_dry_run_retains_exact_plan_without_calling_apply(
     assert status == 0
     assert value["code"] == "III_OPERATION_PLAN_READY"
     assert value["payload"]["plan"]["preflight"]["device"] == "fingerprint"
+
+
+def test_host_provision_apply_retains_exact_preflight_without_connecting(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import iii.host as host
+
+    monkeypatch.setenv("III_OPERATION_STATE_DIR", str(tmp_path / "operations"))
+    monkeypatch.setattr(
+        host,
+        "provision_apply_preflight",
+        lambda _args: {
+            "schema": "iii.host-provisioning-plan/v1",
+            "target": "iii.local",
+            "profile": "real",
+            "content_id": "a" * 64,
+        },
+    )
+    output = StringIO()
+    status = main(
+        [
+            "host",
+            "provision",
+            "apply",
+            "--target",
+            "iii.local",
+            "--inventory",
+            str(tmp_path / "inventory.yml"),
+            "--inputs",
+            str(tmp_path / "inputs.json"),
+            "--dry-run",
+            "--operation-id",
+            "iii-host-provision-dry-run",
+            "--json",
+        ],
+        stdout=output,
+        stderr=StringIO(),
+    )
+    value = json.loads(output.getvalue())
+    assert status == 0
+    assert value["code"] == "III_OPERATION_PLAN_READY"
+    assert value["payload"]["plan"]["preflight"]["content_id"] == "a" * 64
+
+
+def test_host_provision_check_is_declared_read_only(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import iii.host as host
+    import iii_deployment.host_provision as provision
+
+    monkeypatch.setattr(
+        host,
+        "_provision_plan",
+        lambda _args, operation_id: {
+            "schema": "iii.host-provisioning-plan/v1",
+            "operation_id": operation_id,
+            "target": "iii.local",
+            "profile": "real",
+        },
+    )
+    monkeypatch.setattr(
+        host,
+        "_provision_paths",
+        lambda _args: {"schema": tmp_path},
+    )
+    monkeypatch.setattr(
+        provision,
+        "check_plan",
+        lambda *_args, **_kwargs: {
+            "schema": "iii.ansible-run-result/v1",
+            "totals": {"changed": 7},
+        },
+    )
+    output = StringIO()
+    status = main(
+        [
+            "host",
+            "provision",
+            "check",
+            "--target",
+            "iii.local",
+            "--inventory",
+            str(tmp_path / "inventory.yml"),
+            "--inputs",
+            str(tmp_path / "inputs.json"),
+            "--json",
+        ],
+        stdout=output,
+        stderr=StringIO(),
+    )
+    value = json.loads(output.getvalue())
+    assert status == 0
+    assert value["code"] == "III_HOST_PROVISION_CHECKED"
+    assert value["payload"]["mutation_performed"] is False
+    assert value["payload"]["ansible"]["totals"]["changed"] == 7
