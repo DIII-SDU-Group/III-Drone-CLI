@@ -101,6 +101,190 @@ def _rejected(command: str, exc: Exception) -> CommandResult:
     )
 
 
+def _hardware_target(args: argparse.Namespace) -> dict[str, Any]:
+    from iii_deployment.contracts import ContractRegistry
+    from iii_deployment.runtime_target import (
+        load_runtime_targets,
+        resolve_runtime_target,
+    )
+
+    root = _workspace_candidate("deployment/runtime-targets.json").parent.parent
+    selected = resolve_runtime_target(
+        load_runtime_targets(
+            root / "deployment/runtime-targets.json",
+            ContractRegistry(root / "deployment/schemas/v1"),
+        ),
+        selector=args.target,
+        default_selector="real",
+    )
+    if (
+        selected["endpoint"] != "iii.local"
+        or selected["execution_host"] != "aircraft"
+        or selected["logical_id"] != "drone"
+        or selected["runtime_profile"] not in {"real", "opti_track"}
+    ):
+        raise ValueError("hardware inspection requires the shared aircraft target")
+    return selected
+
+
+def _write_hardware_capture(path: Path, report: Mapping[str, Any]) -> None:
+    from iii_deployment.contracts import canonical_json
+
+    destination = path.expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(canonical_json(report) + b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+
+
+def _validate_hardware_report(
+    args: argparse.Namespace,
+    report: Mapping[str, Any],
+    selected: Mapping[str, Any],
+) -> None:
+    from iii_deployment.contracts import content_identity
+    from iii_deployment.hardware_roles import load_manifest
+
+    paths = _paths(args)
+    manifest_path = _first_existing(
+        [
+            Path(sys.prefix)
+            / "share/iii-deployment/hardware/shared-hardware-role-manifest.json",
+            Path(
+                "/usr/local/share/iii-deployment/hardware/shared-hardware-role-manifest.json"
+            ),
+            Path(
+                "/usr/share/iii-deployment/hardware/shared-hardware-role-manifest.json"
+            ),
+            _workspace_candidate(
+                "deployment/hardware/shared-hardware-role-manifest.json"
+            ),
+        ],
+        label="shared hardware-role manifest",
+    )
+    from iii_deployment.contracts import ContractRegistry
+
+    registry = ContractRegistry(paths["schema"])
+    registry.validate("hardware-inspection", report)
+    if report["inspection_id"] != content_identity(
+        {key: item for key, item in report.items() if key != "inspection_id"}
+    ):
+        raise ValueError("receiver hardware inspection identity mismatch")
+    manifest = load_manifest(manifest_path, registry)
+    if report["manifest_id"] != manifest["manifest_id"]:
+        raise ValueError("receiver hardware manifest differs from trusted local policy")
+    if report["profile"] != selected["runtime_profile"]:
+        raise ValueError(
+            "receiver hardware report profile differs from selected target"
+        )
+
+
+def hardware_inspect(args: argparse.Namespace) -> CommandResult:
+    command = getattr(args, "_iii_hardware_command", "iii host inspect")
+    try:
+        from .ssh_manager import SSHManager
+
+        selected = _hardware_target(args)
+        manager = SSHManager(environment=_environment(args))
+        operation_id = f"host-hardware-inspect-{uuid4().hex}"
+        response = manager.receiver_request(
+            {
+                "protocol_version": "1",
+                "action": "hardware-inspect",
+                "operation_id": operation_id,
+                "client_id": manager.client_id,
+                "payload": {},
+                "nonce": None,
+            }
+        )
+        report = response.get("inspection")
+        if not isinstance(report, dict):
+            raise ValueError("receiver hardware inspection result is malformed")
+        _validate_hardware_report(args, report, selected)
+        if args.capture is not None:
+            _write_hardware_capture(args.capture, report)
+    except Exception as exc:
+        code = getattr(exc, "code", "III_HARDWARE_INSPECTION_REJECTED")
+        return CommandResult(
+            command=command,
+            outcome=Outcome.REJECTED,
+            summary="Hardware inspection was refused before any target or policy mutation.",
+            code=code,
+            findings=(Finding(code, str(exc)),),
+            next_actions=(
+                NextAction(
+                    ("iii", "host", "inspect", "--target", args.target),
+                    "Retry the authenticated read-only inspection after restoring target access and host policy.",
+                    target=args.target,
+                ),
+            ),
+        )
+    findings = []
+    for role, evidence in report["roles"].items():
+        if evidence["state"] != "present" or not evidence["stable_path_ok"]:
+            severity = "error" if evidence["requirement"] == "required" else "warning"
+            findings.append(
+                Finding(
+                    "III_HARDWARE_ROLE_UNREADY",
+                    f"{role}: {evidence['state']} (stable path valid: {evidence['stable_path_ok']})",
+                    severity=severity,
+                    field=role,
+                )
+            )
+    if report["unmatched_device_ids"]:
+        findings.append(
+            Finding(
+                "III_HARDWARE_UNMATCHED",
+                f"{len(report['unmatched_device_ids'])} USB device(s) are outside the shared role contract.",
+                severity="warning",
+            )
+        )
+    accepted = report["accepted"] is True
+    return CommandResult(
+        command=command,
+        outcome=Outcome.SUCCESS if accepted else Outcome.WARNING,
+        summary=(
+            "Shared aircraft hardware roles resolved without ambiguity."
+            if accepted
+            else "Aircraft hardware inspection found missing, ambiguous, or unstable required roles."
+        ),
+        code="III_HARDWARE_INSPECTED" if accepted else "III_HARDWARE_NOT_READY",
+        findings=tuple(findings),
+        target=str(selected["endpoint"]),
+        profile=str(selected["runtime_profile"]),
+        evidence=(report["manifest_id"], report["inspection_id"]),
+        payload_schema=report["schema"],
+        payload=report,
+        terminal_reason=(
+            "The authenticated, read-only capture inspected only attached USB role evidence; it did not learn or change matching policy."
+        ),
+    )
+
+
+def _hardware_inspect_parser(parser: argparse.ArgumentParser, *, command: str) -> None:
+    parser.add_argument("--target", choices=("real", "opti_track"), default="real")
+    parser.add_argument(
+        "--capture",
+        type=Path,
+        help="create one owner-only canonical capture; existing files are never overwritten",
+    )
+    parser.set_defaults(
+        func=hardware_inspect,
+        _iii_mutating=False,
+        _iii_hardware_command=command,
+    )
+
+
 def image_inspect(args: argparse.Namespace) -> CommandResult:
     try:
         from iii_deployment.contracts import ContractRegistry
@@ -399,6 +583,21 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     from . import host_maintenance
 
     host_maintenance.initialize(commands)
+    inspect_parser = commands.add_parser(
+        "inspect", help="inspect shared aircraft hardware roles without mutation"
+    )
+    _hardware_inspect_parser(inspect_parser, command="iii host inspect")
+
+    hardware = commands.add_parser(
+        "hardware", help="shared attached-device role diagnostics"
+    )
+    hardware_commands = hardware.add_subparsers(dest="host_hardware_command")
+    hardware_inspect_parser = hardware_commands.add_parser(
+        "inspect", help="capture raw USB evidence and resolve declared roles"
+    )
+    _hardware_inspect_parser(
+        hardware_inspect_parser, command="iii host hardware inspect"
+    )
     image = commands.add_parser(
         "image", help="inspect or write Raspberry Pi removable media"
     )
