@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import struct
 import subprocess
 import time
 from typing import Any, Callable, Mapping
@@ -21,7 +22,7 @@ USER = "iii"
 PROFILE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 IDENTITY = re.compile(r"^[a-f0-9]{64}$")
 OPERATION_ID = re.compile(r"^[a-z0-9][a-z0-9-]{7,63}$")
-PUBLIC_KEY = re.compile(r"^ssh-ed25519 [A-Za-z0-9+/]{43}=$")
+PUBLIC_KEY = re.compile(r"^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$")
 UPLOAD_SCHEMA = "iii.bundle-upload/v1"
 UPLOAD_RESULT_SCHEMA = "iii.bundle-upload-result/v1"
 COMPONENT_FILES = frozenset(
@@ -182,7 +183,9 @@ class SSHManager:
                 "deployment requires one canonical Ed25519 public key",
             )
         try:
-            if len(base64.b64decode(raw[1], validate=True)) != 32:
+            decoded = base64.b64decode(raw[1], validate=True)
+            prefix = struct.pack(">I", 11) + b"ssh-ed25519" + struct.pack(">I", 32)
+            if len(decoded) != len(prefix) + 32 or not decoded.startswith(prefix):
                 raise ValueError
         except (ValueError, binascii.Error) as exc:
             raise SSHAdapterError(

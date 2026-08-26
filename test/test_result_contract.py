@@ -11,7 +11,7 @@ import pytest
 
 from iii.__main__ import build_parser, main
 from iii.operation import OperationError, OperationStore, create_plan
-from iii.result import CommandResult, Finding, NextAction, Outcome
+from iii.result import CommandResult, NextAction, Outcome
 from iii.runner import (
     CommandSpec,
     REQUIRED_COMMAND_FAMILIES,
@@ -227,6 +227,7 @@ def test_every_existing_parser_leaf_is_inventory_covered():
         "logs",
         "records",
         "host",
+        "access",
     }
     # Future providers must select from this declared universal contract surface.
     assert {
@@ -246,6 +247,7 @@ def test_every_existing_parser_leaf_is_inventory_covered():
         "governance",
         "field",
         "documentation",
+        "access",
     } == REQUIRED_COMMAND_FAMILIES
 
 

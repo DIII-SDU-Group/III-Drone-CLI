@@ -92,6 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     host.initialize(parser_host)
 
+    access = import_module("iii.access")
+    parser_access = subparsers.add_parser(
+        "access", help="Manage independent per-computer access and signing authority"
+    )
+    access.initialize(parser_access)
+
     inventory_parser(parser)
     return parser
 

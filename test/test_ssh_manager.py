@@ -4,6 +4,7 @@ import base64
 import json
 from pathlib import Path
 import subprocess
+import struct
 
 import pytest
 from jsonschema import Draft7Validator
@@ -27,8 +28,14 @@ def _identity(tmp_path: Path) -> tuple[Path, Path]:
     )
     private.chmod(0o600)
     public = Path(str(private) + ".pub")
+    wire_key = (
+        struct.pack(">I", len(b"ssh-ed25519"))
+        + b"ssh-ed25519"
+        + struct.pack(">I", 32)
+        + b"k" * 32
+    )
     public.write_text(
-        "ssh-ed25519 " + base64.b64encode(b"k" * 32).decode("ascii") + " workstation\n",
+        "ssh-ed25519 " + base64.b64encode(wire_key).decode("ascii") + " workstation\n",
         encoding="ascii",
     )
     return private, public

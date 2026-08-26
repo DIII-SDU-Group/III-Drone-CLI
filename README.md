@@ -101,7 +101,7 @@ Set these on the operator machine for remote runtime-control commands:
 ```bash
 export CLI_CONFIGURATION=remote
 export III_RUNTIME_API_URL=http://<runtime-host>:8765
-export III_RUNTIME_API_CLI_TOKEN=<remote-cli-token>
+export III_RUNTIME_API_CLI_TOKEN="$(cat "$XDG_CONFIG_HOME/iii/credentials/gc-primary/runtime-api-token")"
 ```
 
 Remote `iii system status`, runtime mutations, entity/service lists, and log
@@ -109,6 +109,12 @@ reads use `iii-runtime-api`. They are not implemented by forwarding shell
 commands over SSH. Mutating remote CLI commands are rejected while an active
 browser GUI session holds the operator lease; read-only status/list/log
 operations remain available.
+
+This environment variable is local process input, not an onboard shared token.
+Each authorized computer has a different token; the aircraft stores only its
+hash. Use `iii access enroll prepare/add/prove`, `iii access list`, and
+`iii access revoke` for staged computer replacement without copying private SSH
+or field-signing keys.
 
 Deployment SSH uses a user-owned Ed25519 identity, disables passwords and agent
 forwarding, accepts the initial lack of server host-key authentication, and

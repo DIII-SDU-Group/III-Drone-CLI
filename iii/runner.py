@@ -42,6 +42,7 @@ REQUIRED_COMMAND_FAMILIES = {
     "governance",
     "field",
     "documentation",
+    "access",
 }
 
 
