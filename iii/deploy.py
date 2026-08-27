@@ -8,7 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
+import time
 from typing import Any, Mapping, Sequence
 
 from .operation import OperationStore, content_id, default_state_root
@@ -452,6 +452,7 @@ def _activation(
     selected: Mapping[str, Any],
     release_id: str,
     checkpoint: str,
+    px4_activation_evidence: Mapping[str, Any],
     qualified: bool = False,
 ) -> dict[str, Any]:
     planning_action = "plan-activate" if action == "activate" else "plan-rollback"
@@ -459,6 +460,7 @@ def _activation(
     parameters: dict[str, Any] = {
         "release_id": release_id,
         "configuration_checkpoint_id": checkpoint,
+        "px4_activation_evidence": dict(px4_activation_evidence),
     }
     if action == "activate":
         parameters["explicit_qualified_action"] = qualified
@@ -482,6 +484,30 @@ def _activation(
     }
 
 
+def _px4_activation_evidence(
+    args: argparse.Namespace,
+    *,
+    selected: Mapping[str, Any],
+    release_id: str,
+) -> dict[str, Any]:
+    """Capture the read-only, complete FMU inventory bound to activation."""
+
+    from .px4 import _store as px4_store
+
+    parameter_profile = str(selected.get("parameter_profile", ""))
+    if parameter_profile not in {"real", "sim"}:
+        raise ValueError("deployment target lacks a supported PX4 parameter profile")
+    evidence = px4_store(args).activation_evidence(
+        parameter_profile,
+        release_id=release_id,
+    )
+    if evidence.get("healthy") is not True:
+        raise ValueError(
+            "PX4 activation inventory does not satisfy the release parameter manifest"
+        )
+    return evidence
+
+
 def activate(args: argparse.Namespace) -> CommandResult:
     return _activate_or_rollback(args, "activate")
 
@@ -498,6 +524,11 @@ def _activate_or_rollback(args: argparse.Namespace, action: str) -> CommandResul
         selected = _target(args)
         _require_remote(selected)
         identifier, store = _operation(args)
+        px4_evidence = _px4_activation_evidence(
+            args,
+            selected=selected,
+            release_id=args.release_id,
+        )
         actual = _activation(
             _manager(),
             action=action,
@@ -505,6 +536,7 @@ def _activate_or_rollback(args: argparse.Namespace, action: str) -> CommandResul
             selected=selected,
             release_id=args.release_id,
             checkpoint=args.configuration_checkpoint_id,
+            px4_activation_evidence=px4_evidence,
             qualified=getattr(args, "qualified", False),
         )
         record = {
@@ -513,6 +545,7 @@ def _activate_or_rollback(args: argparse.Namespace, action: str) -> CommandResul
             "release_id": args.release_id,
             "target": selected,
             "phases": [{"name": action, "state": "accepted", **actual}],
+            "px4_activation_evidence_id": px4_evidence["evidence_id"],
             "px4_write_performed": False,
         }
         record["actual_id"] = content_id(record)
@@ -632,54 +665,101 @@ def _source_impact(
     return snapshot, impact
 
 
-def _install_gc_handoff(
+def _gc_application_store(args: argparse.Namespace):
+    from .gc_application import _store
+
+    environment = dict(_environment(args))
+    if getattr(args, "trusted_signers", None):
+        environment["III_GC_TRUSTED_SIGNERS"] = str(
+            Path(args.trusted_signers).expanduser().resolve()
+        )
+    return _store(argparse.Namespace(_iii_environment=environment))
+
+
+def _install_gc_application(
     component: Path,
     *,
     release_id: str,
-    destination: Path,
-    trusted_signers: Path,
+    store,
 ) -> dict[str, Any]:
-    """Atomically prepare verified GC payload before any aircraft mutation."""
-    from iii_deployment.bundle import extract_bundle, load_bundle_limits
-    from iii_deployment.contracts import ContractRegistry
+    """Verify, import, and stage a release-bound local GC/QGC application."""
+    result = store.stage(component)
+    if result.get("release_id") != release_id:
+        raise ValueError("staged GC application release identity differs")
+    return result
 
-    root = _workspace()
-    final = destination / release_id
-    if final.exists() or final.is_symlink():
-        if final.is_symlink() or not final.is_dir():
-            raise ValueError("existing GC handoff slot is unsafe")
-        expected = _read_json(
-            component / "release-manifest.json", label="GC release manifest"
-        )
-        installed = _read_json(
-            final / "META/release-manifest.json",
-            label="installed GC release manifest",
-        )
-        if installed != expected or installed.get("release_id") != release_id:
-            raise ValueError("existing GC handoff slot has a different identity")
+
+def _remote_status(
+    manager, selected: Mapping[str, Any], operation_id: str
+) -> dict[str, Any]:
+    value = _request(
+        manager,
+        action="status",
+        operation_id=operation_id,
+        payload={},
+    )
+    expected = {
+        "logical_id": str(selected["logical_id"]),
+        "profile": str(selected["runtime_profile"]),
+    }
+    if value.get("target") != expected:
+        raise ValueError("receiver status advertises an unexpected logical target")
+    return value
+
+
+def _gc_safety(
+    remote: Mapping[str, Any], selected: Mapping[str, Any]
+) -> dict[str, Any]:
+    observation = remote.get("activation_safety")
+    if not isinstance(observation, Mapping):
         return {
-            "state": "already-prepared",
-            "path": str(final),
-            "release_id": release_id,
+            "connected": True,
+            "profile": selected["runtime_profile"],
+            "source": "receiver-safety-unavailable",
         }
-    destination.mkdir(parents=True, exist_ok=True, mode=0o700)
-    partial = destination / f".{release_id}.partial-{os.getpid()}"
-    if final.is_symlink() or partial.exists() or partial.is_symlink():
-        raise ValueError(
-            "GC handoff destination is unsafe or has an unresolved partial"
-        )
-    try:
-        extract_bundle(
-            component,
-            partial,
-            trusted_signers,
-            registry=ContractRegistry(root / "deployment/schemas/v1"),
-            host_limits=load_bundle_limits(root / "deployment/operational-policy.json"),
-        )
-        os.replace(partial, final)
-    finally:
-        shutil.rmtree(partial, ignore_errors=True)
-    return {"state": "prepared", "path": str(final), "release_id": release_id}
+    return {"connected": True, **dict(observation), "source": "authenticated-receiver"}
+
+
+def _await_receiver_operation(
+    manager,
+    selected: Mapping[str, Any],
+    operation_id: str,
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            status = _remote_status(manager, selected, operation_id)
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.25)
+            continue
+        operation = status.get("operation")
+        if isinstance(operation, Mapping) and operation.get("state") == "completed":
+            return {"operation": dict(operation), "status": status}
+        if isinstance(operation, Mapping) and operation.get("state") in {
+            "failed",
+            "cancelled",
+        }:
+            raise ValueError(
+                f"receiver operation {operation_id} ended {operation['state']}: "
+                f"{operation.get('failure') or operation.get('checkpoint')}"
+            )
+        time.sleep(0.25)
+    raise ValueError(
+        f"receiver operation {operation_id} did not reach an authenticated terminal state"
+        + (f": {last_error}" if last_error is not None else "")
+    )
+
+
+def _child_operation_id(parent: str, suffix: str) -> str:
+    candidate = f"{parent}-{suffix}"
+    if len(candidate) <= 64:
+        return candidate
+    identity = hashlib.sha256(candidate.encode()).hexdigest()[:32]
+    return f"{parent[:31].rstrip('-')}-{identity}"
 
 
 def field(args: argparse.Namespace) -> CommandResult:
@@ -699,8 +779,6 @@ def field(args: argparse.Namespace) -> CommandResult:
         )
         bundle_root = args.bundle_set.resolve()
         selected_components = set(impact["components"])
-        if args.activate and "drone" not in selected_components:
-            raise ValueError("--activate requires the drone component")
         component_manifests = {
             name: _component(bundle_root / name)[0]
             for name in sorted(selected_components)
@@ -733,7 +811,12 @@ def field(args: argparse.Namespace) -> CommandResult:
             "mutations": [
                 item
                 for item in (
-                    "prepare-gc-handoff" if "gc" in selected_components else None,
+                    "stage-gc-application" if "gc" in selected_components else None,
+                    (
+                        "activate-gc-application"
+                        if args.activate and "gc" in selected_components
+                        else None
+                    ),
                     "transfer-drone" if "drone" in selected_components else None,
                     "stage-drone" if "drone" in selected_components else None,
                     (
@@ -745,73 +828,198 @@ def field(args: argparse.Namespace) -> CommandResult:
                 if item
             ],
             "px4_write": False,
+            "px4_validation": (
+                "complete-disarmed-inventory-before-activation"
+                if args.activate and "drone" in selected_components
+                else "not-requested"
+            ),
         }
         registry = ContractRegistry(root / "deployment/schemas/v1")
         registry.validate("field-deployment-plan", plan)
         plan_path = store.write_record(identifier, "deployment-impact.json", plan)
+        manager = None
+        gc_store = None
+        gc_previous_release = None
+        gc_candidate_manifest = None
+        gc_activated = False
+        timeout_seconds = float(
+            _environment(args).get("III_DEPLOY_AWAIT_TIMEOUT_SEC", "1205")
+        )
+        if timeout_seconds <= 0:
+            raise ValueError("III_DEPLOY_AWAIT_TIMEOUT_SEC must be greater than zero")
         if "gc" in selected_components:
-            trust = Path(
-                args.trusted_signers
-                or _environment(args).get(
-                    "III_RELEASE_TRUSTED_SIGNERS",
-                    "/etc/iii-deployment/trusted-signers.json",
+            gc_store = _gc_application_store(args)
+            gc_previous_release = gc_store.state()["active_release_id"]
+            if (
+                args.activate
+                and "drone" in selected_components
+                and gc_previous_release is None
+            ):
+                raise ValueError(
+                    "paired field update requires a previously active GC release for deterministic rollback"
                 )
-            )
-            result = _install_gc_handoff(
+            result = _install_gc_application(
                 bundle_root / "gc",
                 release_id=release_id,
-                destination=_registry_root(args) / "cache/gc/releases",
-                trusted_signers=trust,
+                store=gc_store,
             )
-            phases.append({"name": "gc", "state": "packaged", "result": result})
+            phases.append({"name": "gc-stage", "state": "staged", "result": result})
+            gc_candidate_manifest = gc_store.release_manifest(release_id)
+            if args.activate:
+                manager = _manager()
+                safety_status = _remote_status(
+                    manager,
+                    selected,
+                    _child_operation_id(identifier, "gc-safety"),
+                )
+                activated_gc = gc_store.activate(
+                    release_id,
+                    operation_id=_child_operation_id(identifier, "gc-activate"),
+                    safety=_gc_safety(safety_status, selected),
+                    override_reason=getattr(args, "gc_override_reason", None),
+                    override_confirmation=getattr(
+                        args, "gc_override_confirmation", None
+                    ),
+                )
+                gc_activated = True
+                phases.append(
+                    {
+                        "name": "gc-activate",
+                        "state": "activated",
+                        "result": activated_gc,
+                    }
+                )
         else:
             phases.append(
                 {
-                    "name": "gc",
+                    "name": "gc-stage",
                     "state": "skipped",
                     "reason": "source impact does not require GC",
                 }
             )
         if "drone" in selected_components:
-            manager = _manager()
-            staged = _stage_component(
-                manager,
-                bundle_root / "drone",
-                selected=selected,
-                operation_id=f"{identifier}-stage",
-                status_index=args.status_index,
-            )
-            phases.append(
-                {
-                    "name": "drone-stage",
-                    "state": "accepted",
-                    "result": staged,
-                }
-            )
-            if args.activate:
-                activated = _activation(
+            manager = manager or _manager()
+            try:
+                stage_operation = _child_operation_id(identifier, "stage")
+                staged = _stage_component(
                     manager,
-                    action="activate",
-                    operation_id=f"{identifier}-activate",
+                    bundle_root / "drone",
                     selected=selected,
-                    release_id=release_id,
-                    checkpoint=args.configuration_checkpoint_id,
+                    operation_id=stage_operation,
+                    status_index=args.status_index,
+                )
+                staged_terminal = _await_receiver_operation(
+                    manager,
+                    selected,
+                    stage_operation,
+                    timeout_seconds=timeout_seconds,
                 )
                 phases.append(
                     {
-                        "name": "drone-activate",
-                        "state": "accepted",
-                        "result": activated,
+                        "name": "drone-stage",
+                        "state": "completed",
+                        "result": {**staged, "terminal": staged_terminal},
                     }
                 )
-            else:
-                phases.append(
-                    {
-                        "name": "drone-activate",
-                        "state": "skipped",
-                        "reason": "activation was not requested",
-                    }
-                )
+                if args.activate:
+                    px4_evidence = _px4_activation_evidence(
+                        args,
+                        selected=selected,
+                        release_id=release_id,
+                    )
+                    phases.append(
+                        {
+                            "name": "px4-validate",
+                            "state": "completed",
+                            "result": {
+                                "evidence_id": px4_evidence["evidence_id"],
+                                "snapshot_id": px4_evidence["snapshot"]["snapshot_id"],
+                                "manifest_id": px4_evidence["manifest_id"],
+                                "writes_performed": 0,
+                            },
+                        }
+                    )
+                    activation_operation = _child_operation_id(identifier, "activate")
+                    activated = _activation(
+                        manager,
+                        action="activate",
+                        operation_id=activation_operation,
+                        selected=selected,
+                        release_id=release_id,
+                        checkpoint=args.configuration_checkpoint_id,
+                        px4_activation_evidence=px4_evidence,
+                    )
+                    activated_terminal = _await_receiver_operation(
+                        manager,
+                        selected,
+                        activation_operation,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    phases.append(
+                        {
+                            "name": "drone-activate",
+                            "state": "completed",
+                            "result": {**activated, "terminal": activated_terminal},
+                        }
+                    )
+                else:
+                    phases.append(
+                        {
+                            "name": "drone-activate",
+                            "state": "skipped",
+                            "reason": "activation was not requested",
+                        }
+                    )
+            except Exception:
+                if (
+                    gc_activated
+                    and gc_store is not None
+                    and gc_candidate_manifest is not None
+                ):
+                    recovery_status = _remote_status(
+                        manager,
+                        selected,
+                        _child_operation_id(identifier, "pair-recovery"),
+                    )
+                    restored_drone = recovery_status.get("active_release_manifest")
+                    from iii_deployment.gc_application import (
+                        application_pair_compatible,
+                    )
+
+                    if isinstance(
+                        restored_drone, Mapping
+                    ) and application_pair_compatible(
+                        gc_candidate_manifest, restored_drone
+                    ):
+                        phases.append(
+                            {
+                                "name": "gc-reconcile",
+                                "state": "retained-compatible",
+                                "reason": "new GC remains compatible with the authenticated restored drone release",
+                            }
+                        )
+                    else:
+                        if gc_previous_release is None:
+                            raise ValueError(
+                                "drone failed and no prior GC release exists for paired rollback"
+                            )
+                        restored_gc = gc_store.restore_release(
+                            gc_previous_release,
+                            operation_id=_child_operation_id(identifier, "gc-rollback"),
+                            safety=_gc_safety(recovery_status, selected),
+                            override_reason=getattr(args, "gc_override_reason", None),
+                            override_confirmation=getattr(
+                                args, "gc_override_confirmation", None
+                            ),
+                        )
+                        phases.append(
+                            {
+                                "name": "gc-reconcile",
+                                "state": "rolled-back",
+                                "result": restored_gc,
+                            }
+                        )
+                raise
         else:
             phases.append(
                 {
@@ -1190,6 +1398,14 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     field_parser.add_argument("--include-mission", action="append", default=[])
     field_parser.add_argument("--exclude-mission", action="append", default=[])
     field_parser.add_argument("--activate", action="store_true")
+    field_parser.add_argument(
+        "--gc-override-reason",
+        help="separately audited GC recovery reason when receiver safety is unavailable",
+    )
+    field_parser.add_argument(
+        "--gc-override-confirmation",
+        help="exact GC recovery warning confirmation",
+    )
     _target_option(field_parser, default="real")
     field_parser.set_defaults(func=field, _iii_mutating=True)
 

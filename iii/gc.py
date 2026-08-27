@@ -19,6 +19,7 @@ TARGET_UNIT = "iii-gc.target"
 BROWSER_UNIT = "iii-gc-browser.service"
 MANAGED_UNITS = (
     TARGET_UNIT,
+    "iii-gc-application-reconcile.service",
     "iii-gc-proxy.service",
     "iii-gc-frontend.service",
     "iii-gc-discovery.service",
@@ -342,6 +343,9 @@ def _provision_arguments(parser: argparse.ArgumentParser) -> None:
 
 def initialize(parser: argparse.ArgumentParser) -> None:
     commands = parser.add_subparsers(dest="gc_command")
+    from . import gc_application
+
+    gc_application.initialize(commands)
     provision_parser = commands.add_parser(
         "provision", help="converge this supported Ubuntu graphical host"
     )

@@ -104,6 +104,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gc.initialize(parser_gc)
 
+    qgc = import_module("iii.qgc")
+    parser_qgc = subparsers.add_parser(
+        "qgc", help="Operate the independently pinned host QGroundControl"
+    )
+    qgc.initialize(parser_qgc)
+
+    px4 = import_module("iii.px4")
+    parser_px4 = subparsers.add_parser(
+        "px4", help="Inspect and explicitly manage release-owned PX4 parameters"
+    )
+    px4.initialize(parser_px4)
+
     inventory_parser(parser)
     return parser
 

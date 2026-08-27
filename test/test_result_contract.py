@@ -228,6 +228,8 @@ def test_every_existing_parser_leaf_is_inventory_covered():
         "host",
         "access",
         "gc",
+        "qgc",
+        "px4",
     }
     # Future providers must select from this declared universal contract surface.
     assert {

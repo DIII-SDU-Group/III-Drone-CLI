@@ -285,6 +285,83 @@ def test_matching_partial_resumes_and_mismatched_identity_is_rejected(
     assert failure.value.code == "III_SSH_PARTIAL_MISMATCH"
 
 
+def test_portable_backup_upload_uses_fixed_resumable_sftp_boundary(
+    tmp_path: Path,
+) -> None:
+    private, public = _identity(tmp_path)
+    archive = tmp_path / "portable-state.tar"
+    archive.write_bytes(b"portable archive fixture" * 100)
+    backup_id = "d" * 64
+
+    class BackupRunner:
+        def __init__(self) -> None:
+            self.calls = []
+            self.manifest = None
+
+        def __call__(self, argv, **kwargs):
+            self.calls.append((list(argv), kwargs))
+            if argv[0] == "sftp":
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
+            command = argv[-1] if argv[-1].startswith("iii-backup-upload ") else None
+            if command is None:
+                request = json.loads(kwargs["input"])
+                response = {
+                    "schema": "iii.receiver-response/v1",
+                    "ok": True,
+                    "result": {
+                        "schema": "iii.receiver-result/v1",
+                        "target": {"logical_id": "drone", "profile": "real"},
+                        "operation_id": request["operation_id"],
+                    },
+                }
+            elif command.startswith("iii-backup-upload begin "):
+                self.manifest = json.loads(kwargs["input"])
+                response = self.status(complete=False)
+            elif command.startswith("iii-backup-upload finalize "):
+                response = self.status(complete=True)
+            else:
+                raise AssertionError(argv)
+            return subprocess.CompletedProcess(
+                argv, 0, canonical_json(response) + b"\n", b""
+            )
+
+        def status(self, *, complete):
+            assert self.manifest is not None
+            expected = self.manifest["archive"]
+            return {
+                "schema": "iii.portable-backup-upload-result/v1",
+                "backup_id": self.manifest["backup_id"],
+                "upload_id": self.manifest["upload_id"],
+                "state": "complete" if complete else "partial",
+                "resumed": False,
+                "archive": (expected if complete else {"size": 0, "sha256": None}),
+            }
+
+    runner = BackupRunner()
+    ticks = iter((10.0, 12.0))
+    manager = SSHManager(
+        identity_file=private,
+        public_key_file=public,
+        runner=runner,
+        monotonic=lambda: next(ticks),
+    )
+    result = manager.upload_backup(
+        archive,
+        backup_id=backup_id,
+        profile="real",
+        operation_id="backup-upload-probe",
+    )
+    assert result["backup_id"] == backup_id
+    assert result["bytes_transferred"] == archive.stat().st_size
+    assert result["target_met"] is True
+    sftp = next(call for call in runner.calls if call[0][0] == "sftp")
+    assert (
+        f'"backup-{backup_id}.partial/portable-state.tar"' in sftp[1]["input"].decode()
+    )
+    commands = [call[0][-1] for call in runner.calls if call[0][0] == "ssh"]
+    assert commands[-1] == f"iii-backup-upload finalize {backup_id}"
+
+
 @pytest.mark.parametrize(
     ("stderr", "code"),
     [

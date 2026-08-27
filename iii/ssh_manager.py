@@ -36,6 +36,8 @@ COMPONENT_FILES = frozenset(
 )
 STATUS_INDEX_NAME = "release-status-index.json"
 TRANSFER_TARGET_S = 120.0
+BACKUP_UPLOAD_SCHEMA = "iii.portable-backup-upload/v1"
+BACKUP_UPLOAD_RESULT_SCHEMA = "iii.portable-backup-upload-result/v1"
 
 
 def canonical_json(value: Any) -> bytes:
@@ -635,6 +637,116 @@ class SSHManager:
             logical_identity_checked=True,
             physical_host_authenticated=False,
         )
+
+    def _backup_upload_control(
+        self,
+        action: str,
+        backup_id: str,
+        *,
+        document: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if action not in {"begin", "inspect", "finalize"} or not IDENTITY.fullmatch(
+            backup_id
+        ):
+            raise SSHAdapterError(
+                "III_SSH_BACKUP_UPLOAD_INVALID",
+                "portable backup upload control arguments are invalid",
+            )
+        result = self._ssh(
+            original_command=f"iii-backup-upload {action} {backup_id}",
+            input_bytes=(
+                canonical_json(document) + b"\n" if document is not None else None
+            ),
+        )
+        if result.get("schema") != BACKUP_UPLOAD_RESULT_SCHEMA:
+            raise SSHAdapterError(
+                "III_SSH_RESPONSE_INVALID",
+                "portable backup upload result schema is unsupported",
+            )
+        return result
+
+    def upload_backup(
+        self,
+        archive: Path,
+        *,
+        backup_id: str,
+        profile: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Resume one verified portable archive into the fixed incoming root."""
+
+        self.verify_logical_target(profile=profile, operation_id=operation_id)
+        if not IDENTITY.fullmatch(backup_id):
+            raise SSHAdapterError(
+                "III_SSH_BACKUP_UPLOAD_INVALID", "portable backup identity is invalid"
+            )
+        archive = archive.expanduser().absolute()
+        identity = self._local_file(archive)
+        manifest: dict[str, Any] = {
+            "schema": BACKUP_UPLOAD_SCHEMA,
+            "upload_id": "0" * 64,
+            "backup_id": backup_id,
+            "client_id": self.client_id,
+            "archive": identity,
+        }
+        manifest["upload_id"] = content_identity(
+            {key: value for key, value in manifest.items() if key != "upload_id"}
+        )
+        started = self.monotonic()
+        remote = self._backup_upload_control("begin", backup_id, document=manifest)
+        observed = remote.get("archive")
+        if (
+            remote.get("backup_id") != backup_id
+            or remote.get("upload_id") != manifest["upload_id"]
+            or not isinstance(observed, dict)
+            or set(observed) != {"size", "sha256"}
+            or not isinstance(observed["size"], int)
+            or isinstance(observed["size"], bool)
+            or not 0 <= observed["size"] <= identity["size"]
+            or (
+                observed["size"] == identity["size"]
+                and observed["sha256"] != identity["sha256"]
+            )
+        ):
+            raise SSHAdapterError(
+                "III_SSH_PARTIAL_MISMATCH",
+                "remote portable backup partial differs from local identity",
+            )
+        initial_size = observed["size"]
+        if remote.get("state") == "partial" and initial_size < identity["size"]:
+            self._sftp(
+                [
+                    "reput -f "
+                    + self._sftp_quote(str(archive))
+                    + " "
+                    + self._sftp_quote(f"backup-{backup_id}.partial/portable-state.tar")
+                ]
+            )
+            remote = self._backup_upload_control("finalize", backup_id)
+        if remote.get("state") != "complete" or remote.get("archive") != {
+            "size": identity["size"],
+            "sha256": identity["sha256"],
+        }:
+            raise SSHAdapterError(
+                "III_SSH_TRANSFER_INCOMPLETE",
+                "portable backup upload did not finalize exactly",
+            )
+        elapsed = self.monotonic() - started
+        return {
+            "schema": "iii.ssh-portable-backup-transfer-result/v1",
+            "backup_id": backup_id,
+            "upload_id": manifest["upload_id"],
+            "archive_sha256": identity["sha256"],
+            "bytes_total": identity["size"],
+            "bytes_transferred": identity["size"] - initial_size,
+            "resumed": initial_size > 0,
+            "elapsed_s": elapsed,
+            "target_s": TRANSFER_TARGET_S,
+            "target_met": elapsed <= TRANSFER_TARGET_S,
+            "endpoint": self.endpoint,
+            "logical_identity_checked": True,
+            "physical_host_authenticated": False,
+        }
 
     def execute(self, _command):
         raise SSHAdapterError(

@@ -156,7 +156,9 @@ host; the archive is verified and imported before new machine/SSH material is
 created, and no private key or runtime credential is restored. `iii gc
 start/stop/restart/open/status` owns only local frontend, proxy, discovery,
 mirror, clock, and browser behavior. QGroundControl remains exclusively under
-`iii qgc`. The complete boundary and commissioning limits are in the workspace
+`iii qgc start/stop/restart/status`; signed application slots are managed by
+`iii gc application stage/activate/rollback/reconcile/prune/status`. The complete
+boundary and commissioning limits are in the workspace
 `docs/gc-host-provisioning.md` runbook.
 
 ## Module Map

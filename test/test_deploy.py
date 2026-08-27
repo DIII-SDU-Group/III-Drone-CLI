@@ -11,9 +11,18 @@ from iii.__main__ import main
 from iii import deploy
 from iii.operation import OperationStore, create_plan
 
-
 IDENTITY = "a" * 64
 CHECKPOINT = "b" * 64
+
+
+def px4_activation_evidence() -> dict:
+    return {
+        "evidence_id": "6" * 64,
+        "manifest_id": "7" * 64,
+        "snapshot": {"snapshot_id": "8" * 64},
+        "healthy": True,
+        "writes_performed": 0,
+    }
 
 
 def target():
@@ -70,6 +79,30 @@ class Manager:
 
     def receiver_request(self, request):
         self.order.append(request["action"])
+        if request["action"] == "status":
+            return {
+                "target": {"logical_id": "drone", "profile": "real"},
+                "operation": {"state": "completed", "result": {}},
+                "activation_safety": {
+                    "profile": "real",
+                    "runtime_api_available": True,
+                    "runtime_identity_matches": True,
+                    "runtime_fresh": True,
+                    "px4_available": True,
+                    "px4_fresh": True,
+                    "armed": False,
+                    "in_air": False,
+                    "mission_fresh": True,
+                    "mission_active": False,
+                    "mission_control_owner": False,
+                    "operation_fresh": True,
+                    "custom_operation_active": False,
+                    "custom_operation_control_owner": False,
+                    "direct_operation_active": False,
+                    "reference_owner_active": False,
+                    "continuously_safe_for_s": 3.5,
+                },
+            }
         if request["action"].startswith("plan-"):
             return {
                 "plan": {
@@ -168,6 +201,8 @@ def _field_args(tmp_path, bundle, *, activate=False):
         include_mission=[],
         exclude_mission=[],
         activate=activate,
+        gc_override_reason=None,
+        gc_override_confirmation=None,
         _iii_operation_id="iii-fake-field-operation",
         _iii_environment={"III_OPERATION_STATE_DIR": str(tmp_path / "operations")},
     )
@@ -185,9 +220,17 @@ def test_gc_only_field_flow_never_contacts_drone(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         deploy,
-        "_install_gc_handoff",
+        "_install_gc_application",
         lambda *_args, **_kwargs: order.append("gc")
         or {"state": "prepared", "release_id": IDENTITY},
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_gc_application_store",
+        lambda _args: SimpleNamespace(
+            state=lambda: {"active_release_id": "9" * 64},
+            release_manifest=lambda _release_id: {"release_id": IDENTITY},
+        ),
     )
     monkeypatch.setattr(
         deploy,
@@ -200,7 +243,7 @@ def test_gc_only_field_flow_never_contacts_drone(monkeypatch, tmp_path):
     assert result.outcome.value == "success"
     assert order == ["gc"]
     assert [phase["name"] for phase in result.payload["actual"]["phases"]] == [
-        "gc",
+        "gc-stage",
         "drone-stage",
     ]
     assert result.payload["actual"]["phases"][1]["state"] == "skipped"
@@ -219,7 +262,7 @@ def test_drone_only_field_flow_never_reads_gc_bundle(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         deploy,
-        "_install_gc_handoff",
+        "_install_gc_application",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("GC handoff prepared")
         ),
@@ -228,35 +271,24 @@ def test_drone_only_field_flow_never_reads_gc_bundle(monkeypatch, tmp_path):
     result = deploy.field(_field_args(tmp_path, bundle))
 
     assert result.outcome.value == "success"
-    assert order == ["drone-transfer", "plan-stage", "stage"]
+    assert order == ["drone-transfer", "plan-stage", "stage", "status"]
     assert result.payload["actual"]["phases"][0] == {
-        "name": "gc",
+        "name": "gc-stage",
         "state": "skipped",
         "reason": "source impact does not require GC",
     }
 
 
-def test_existing_gc_handoff_must_match_exact_release_manifest(tmp_path):
+def test_staged_gc_application_must_match_exact_release_identity(tmp_path):
     component_root = tmp_path / "gc-component"
     component(component_root)
-    destination = tmp_path / "gc-cache"
-    installed = destination / IDENTITY / "META"
-    installed.mkdir(parents=True)
-    canonical(
-        installed / "release-manifest.json",
-        {
-            "release_id": "9" * 64,
-            "release_class": "field-development",
-            "source_identity": "c" * 64,
-        },
-    )
+    store = SimpleNamespace(stage=lambda _component: {"release_id": "9" * 64})
 
-    with pytest.raises(ValueError, match="different identity"):
-        deploy._install_gc_handoff(
+    with pytest.raises(ValueError, match="differs"):
+        deploy._install_gc_application(
             component_root,
             release_id=IDENTITY,
-            destination=destination,
-            trusted_signers=tmp_path / "unused.json",
+            store=store,
         )
 
 
@@ -387,6 +419,11 @@ def test_standalone_stage_and_activate_persist_self_identifying_actuals(
     manager = Manager([])
     monkeypatch.setattr(deploy, "_target", lambda _args: target())
     monkeypatch.setattr(deploy, "_manager", lambda: manager)
+    monkeypatch.setattr(
+        deploy,
+        "_px4_activation_evidence",
+        lambda *_args, **_kwargs: px4_activation_evidence(),
+    )
     environment = {"III_OPERATION_STATE_DIR": str(tmp_path / "operations")}
     staged = deploy.stage(
         SimpleNamespace(
@@ -463,11 +500,28 @@ def test_fake_target_field_flow_is_gc_before_drone_and_never_writes_px4(
         lambda *_args: ({"content_identity": "c" * 64}, impact),
     )
 
-    def gc_first(*_args, **_kwargs):
-        order.append("gc")
-        return {"state": "prepared", "release_id": IDENTITY}
+    class GCStore:
+        def state(self):
+            return {"active_release_id": "9" * 64}
 
-    monkeypatch.setattr(deploy, "_install_gc_handoff", gc_first)
+        def release_manifest(self, _release_id):
+            return {"release_id": IDENTITY}
+
+        def activate(self, *_args, **_kwargs):
+            order.append("gc-activate")
+            return {"state": "active", "release_id": IDENTITY}
+
+    def gc_first(*_args, **_kwargs):
+        order.append("gc-stage")
+        return {"state": "staged", "release_id": IDENTITY}
+
+    monkeypatch.setattr(deploy, "_gc_application_store", lambda _args: GCStore())
+    monkeypatch.setattr(deploy, "_install_gc_application", gc_first)
+    monkeypatch.setattr(
+        deploy,
+        "_px4_activation_evidence",
+        lambda *_args, **_kwargs: px4_activation_evidence(),
+    )
     args = SimpleNamespace(
         target="real",
         bundle_set=bundle,
@@ -478,22 +532,165 @@ def test_fake_target_field_flow_is_gc_before_drone_and_never_writes_px4(
         include_mission=[],
         exclude_mission=[],
         activate=True,
+        gc_override_reason=None,
+        gc_override_confirmation=None,
         _iii_operation_id="iii-fake-field-operation",
         _iii_environment={"III_OPERATION_STATE_DIR": str(tmp_path / "operations")},
     )
     result = deploy.field(args)
     assert result.outcome.value == "success"
     assert order == [
-        "gc",
+        "gc-stage",
+        "status",
+        "gc-activate",
         "drone-transfer",
         "plan-stage",
         "stage",
+        "status",
         "plan-activate",
         "activate",
+        "status",
     ]
     assert result.payload["actual"]["px4_write_performed"] is False
+    assert result.payload["actual"]["phases"][3]["name"] == "px4-validate"
+    assert result.payload["actual"]["phases"][3]["result"]["writes_performed"] == 0
     assert result.payload["impact"]["groups"]["px4_manifest_drift"]
     assert "Components: drone, gc" in result.payload["display"]
-    assert "Actual phases: gc=packaged" in result.payload["display"]
+    assert "Actual phases: gc-stage=staged" in result.payload["display"]
     record = tmp_path / "operations/iii-fake-field-operation/deployment-actual.json"
-    assert json.loads(record.read_text())["phases"][0]["name"] == "gc"
+    assert json.loads(record.read_text())["phases"][0]["name"] == "gc-stage"
+
+
+def _compatibility_manifest(runtime_range: str):
+    return {
+        "compatibility": {
+            "api_ranges": {"runtime_api": runtime_range},
+            "schema_ranges": {"configuration": ">=1.0.0,<2.0.0"},
+        },
+        "qgc": {
+            "selected_version": "5.0.8",
+            "compatible_versions": ["5.0.8"],
+        },
+    }
+
+
+@pytest.mark.parametrize("compatible", [True, False])
+def test_drone_failure_reconciles_new_gc_against_authenticated_restored_drone(
+    monkeypatch, tmp_path, compatible
+):
+    bundle = tmp_path / "bundle"
+    component(bundle / "drone")
+    component(bundle / "gc")
+    order = []
+    candidate = _compatibility_manifest(">=2.0.0,<3.0.0")
+    restored = _compatibility_manifest(
+        ">=2.2.0,<3.0.0" if compatible else ">=3.0.0,<4.0.0"
+    )
+
+    class FailureManager(Manager):
+        def __init__(self, actions):
+            super().__init__(actions)
+            self.status_calls = 0
+
+        def receiver_request(self, request):
+            if request["action"] != "status":
+                return super().receiver_request(request)
+            self.order.append("status")
+            self.status_calls += 1
+            state = "failed" if self.status_calls == 2 else "completed"
+            return {
+                "target": {"logical_id": "drone", "profile": "real"},
+                "operation": {"state": state, "failure": "simulated stage failure"},
+                "activation_safety": Manager([]).receiver_request({"action": "status"})[
+                    "activation_safety"
+                ],
+                "active_release_manifest": restored,
+            }
+
+    class GCStore:
+        def state(self):
+            return {"active_release_id": "9" * 64}
+
+        def release_manifest(self, _release_id):
+            return candidate
+
+        def activate(self, *_args, **_kwargs):
+            order.append("gc-activate")
+            return {"state": "active"}
+
+        def restore_release(self, release_id, **_kwargs):
+            order.append(f"gc-restore:{release_id}")
+            return {"state": "active", "release_id": release_id}
+
+    manager = FailureManager(order)
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+    monkeypatch.setattr(deploy, "_manager", lambda: manager)
+    monkeypatch.setattr(
+        deploy,
+        "_source_impact",
+        lambda *_args: ({"content_identity": "c" * 64}, _impact("drone", "gc")),
+    )
+    monkeypatch.setattr(deploy, "_gc_application_store", lambda _args: GCStore())
+    monkeypatch.setattr(
+        deploy,
+        "_install_gc_application",
+        lambda *_args, **_kwargs: {"state": "staged", "release_id": IDENTITY},
+    )
+
+    result = deploy.field(_field_args(tmp_path, bundle, activate=True))
+
+    assert result.outcome.value == "rejected"
+    if compatible:
+        assert all(not item.startswith("gc-restore:") for item in order)
+    else:
+        assert f"gc-restore:{'9' * 64}" in order
+    actual = json.loads(
+        (
+            tmp_path / "operations/iii-fake-field-operation/deployment-actual.json"
+        ).read_text()
+    )
+    reconciliation = next(
+        phase for phase in actual["phases"] if phase["name"] == "gc-reconcile"
+    )
+    assert reconciliation["state"] == (
+        "retained-compatible" if compatible else "rolled-back"
+    )
+
+
+def test_gc_failure_leaves_drone_entirely_untouched(monkeypatch, tmp_path):
+    bundle = tmp_path / "bundle"
+    component(bundle / "drone")
+    component(bundle / "gc")
+    order = []
+
+    class GCStore:
+        def state(self):
+            return {"active_release_id": "9" * 64}
+
+        def release_manifest(self, _release_id):
+            return _compatibility_manifest(">=2.0.0,<3.0.0")
+
+        def activate(self, *_args, **_kwargs):
+            raise ValueError("simulated GC health failure")
+
+    manager = Manager(order)
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+    monkeypatch.setattr(deploy, "_manager", lambda: manager)
+    monkeypatch.setattr(
+        deploy,
+        "_source_impact",
+        lambda *_args: ({"content_identity": "c" * 64}, _impact("drone", "gc")),
+    )
+    monkeypatch.setattr(deploy, "_gc_application_store", lambda _args: GCStore())
+    monkeypatch.setattr(
+        deploy,
+        "_install_gc_application",
+        lambda *_args, **_kwargs: {"state": "staged", "release_id": IDENTITY},
+    )
+
+    result = deploy.field(_field_args(tmp_path, bundle, activate=True))
+
+    assert result.outcome.value == "rejected"
+    assert "drone-transfer" not in order
+    assert "plan-stage" not in order
+    assert "stage" not in order
