@@ -20,7 +20,6 @@ from iii.runner import (
     invoke,
 )
 
-
 SCHEMA = (
     Path(__file__).resolve().parents[1]
     / "iii"
@@ -228,6 +227,7 @@ def test_every_existing_parser_leaf_is_inventory_covered():
         "records",
         "host",
         "access",
+        "gc",
     }
     # Future providers must select from this declared universal contract surface.
     assert {

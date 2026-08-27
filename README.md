@@ -136,6 +136,29 @@ passphrases. Apply always preserves Ethernet DHCP and arms a fixed onboard
 90-second monotonic rollback timer; the separately authenticated confirmation
 commits the candidate profile after reconnection.
 
+## Ground-Control Host Provisioning
+
+From a stock graphical Ubuntu 22.04/24.04 x86_64 installation containing the
+workspace clone, the source wrapper bootstraps a content-addressed, hash-locked
+controller and routes convergence through the canonical operation contract:
+
+```bash
+sudo -v
+tools/III-Drone-CLI/bin/iii gc provision --dry-run --json
+tools/III-Drone-CLI/bin/iii gc provision \
+  --operation-id <retained-operation-id> --confirm --json
+iii gc status --json
+```
+
+Use `--offline --offline-cache <path>` only with a complete authenticated cache
+for the exact Ubuntu platform. Use `--replacement-archive <path>` only on a fresh
+host; the archive is verified and imported before new machine/SSH material is
+created, and no private key or runtime credential is restored. `iii gc
+start/stop/restart/open/status` owns only local frontend, proxy, discovery,
+mirror, clock, and browser behavior. QGroundControl remains exclusively under
+`iii qgc`. The complete boundary and commissioning limits are in the workspace
+`docs/gc-host-provisioning.md` runbook.
+
 ## Module Map
 
 - `__main__.py`: top-level argument parser and subcommand dispatcher

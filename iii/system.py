@@ -9,10 +9,8 @@ import subprocess
 import time
 
 from .runtime_api_client import RuntimeApiClient, RuntimeApiError
-from .system_client import DaemonClient
 from .tmux_handler import TmuxHandler
 from .result import CommandResult, Finding, NextAction, Outcome
-
 
 RUNTIME_BOOT = "runtime.boot"
 RUNTIME_START = "runtime.start"
@@ -53,6 +51,11 @@ def _sim_mission_catalog_preflight() -> dict[str, object]:
 
 
 def _local_client() -> "DaemonClient":
+    # The local daemon backend belongs to III-Drone-Runtime and is unavailable
+    # in the intentionally ROS-free GC controller/runtime environments.  Keep
+    # it lazy so remote and GC commands can still share the complete parser.
+    from .system_client import DaemonClient
+
     return DaemonClient()
 
 

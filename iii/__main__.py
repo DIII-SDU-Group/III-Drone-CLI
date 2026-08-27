@@ -98,6 +98,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     access.initialize(parser_access)
 
+    gc = import_module("iii.gc")
+    parser_gc = subparsers.add_parser(
+        "gc", help="Provision and operate the ROS-free ground-control host stack"
+    )
+    gc.initialize(parser_gc)
+
     inventory_parser(parser)
     return parser
 

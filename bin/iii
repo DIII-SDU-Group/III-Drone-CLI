@@ -3,6 +3,20 @@ set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 CLI_DIR="$(dirname "$SCRIPT_DIR")"
+WORKSPACE_ROOT="$(cd "$CLI_DIR/../.." && pwd)"
+
+if [[ "${III_GC_CONTROLLER_BOOTSTRAPPED:-0}" != "1" && "${1:-}" == "gc" && "${2:-}" == "provision" ]]; then
+  bootstrap_args=()
+  for ((index=1; index <= $#; index++)); do
+    if [[ "${!index}" == "--offline-cache" ]]; then
+      next=$((index + 1))
+      [[ $next -le $# ]] || { echo "--offline-cache requires a path" >&2; exit 64; }
+      bootstrap_args+=(--offline-cache "${!next}")
+      break
+    fi
+  done
+  exec python3 "$WORKSPACE_ROOT/deployment/scripts/bootstrap_gc_controller.py" "${bootstrap_args[@]}" -- "$@"
+fi
 
 if [[ -n "${PYTHONPATH:-}" ]]; then
   export PYTHONPATH="$CLI_DIR:$PYTHONPATH"
