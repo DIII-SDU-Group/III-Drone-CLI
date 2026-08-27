@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -195,6 +194,114 @@ def prepare(args: argparse.Namespace) -> CommandResult:
             if args.offline
             else "The signed release-status chain was refreshed monotonically and the complete paired cache was verified."
         ),
+    )
+
+
+def verify_offline(args: argparse.Namespace) -> CommandResult:
+    """Verify representative component packaging using only authenticated caches."""
+
+    from . import release as release_cli
+    from iii_deployment.contracts import ContractRegistry, content_identity
+    from iii_deployment.field import field_cache_report
+
+    selected = None
+    try:
+        selected = _target(args)
+        if selected["selector"] != "real":
+            raise ValueError(
+                "offline field verification is bound to the real target contract"
+            )
+        if not args.offline:
+            raise ValueError("field verification requires explicit --offline")
+        runtime = release_cli._runtime(args)
+        releases = []
+        scenarios = []
+        for version in sorted(set(args.version)):
+            cached = release_cli._load_cached(runtime, version)
+            generated = cached.status_index["generated_at"]
+            generated_at = datetime.fromisoformat(generated.replace("Z", "+00:00"))
+            age_days = max(
+                0.0,
+                (datetime.now(timezone.utc) - generated_at).total_seconds() / 86400,
+            )
+            components = sorted(cached.publication["components"])
+            releases.append(
+                {
+                    "version": version,
+                    "release_id": cached.publication["release_id"],
+                    "verified": True,
+                    "status": cached.status["status"],
+                    "status_statement_id": cached.status["statement_id"],
+                    "status_index_id": cached.status_index["index_id"],
+                    "status_index_generated_at": generated,
+                    "status_age_days": age_days,
+                    "components": components,
+                    "cache_root": str(cached.root),
+                }
+            )
+            for scenario, required in (
+                ("gc-only", ("gc",)),
+                ("drone-only", ("drone",)),
+                ("paired", ("drone", "gc")),
+            ):
+                missing = sorted(set(required) - set(components))
+                if missing:
+                    raise ValueError(
+                        f"{version} cannot verify {scenario}; missing {', '.join(missing)}"
+                    )
+                scenarios.append(
+                    {
+                        "version": version,
+                        "release_id": cached.publication["release_id"],
+                        "scenario": scenario,
+                        "components": list(required),
+                        "component_contracts": {
+                            name: cached.publication["components"][name]
+                            for name in required
+                        },
+                        "verified": True,
+                        "network_access": False,
+                        "target_mutation": False,
+                    }
+                )
+            release_cli._retain_cache_evidence(args, cached)
+        completeness = field_cache_report(releases)
+        if not completeness["complete"]:
+            raise ValueError(
+                "the offline cache is not a complete qualified paired release set"
+            )
+        body = {
+            "schema": "iii.field-offline-verification/v1",
+            "cache_id": completeness["cache_id"],
+            "releases": releases,
+            "scenarios": scenarios,
+            "offline": True,
+            "network_access": False,
+            "target_mutation": False,
+        }
+        report = {**body, "verification_id": content_identity(body)}
+        ContractRegistry(_workspace() / "deployment/schemas/v1").validate(
+            "field-offline-verification", report
+        )
+        identifier = operation_id()
+        path = OperationStore(default_state_root(_environment(args))).write_record(
+            identifier, "field-offline-verification.json", report
+        )
+        readiness_path = _retain_readiness(args, report["verification_id"], report)
+    except Exception as exc:
+        return _reject("iii field verify", exc, target=selected)
+    return CommandResult(
+        command="iii field verify",
+        outcome=Outcome.SUCCESS,
+        summary=f"Verified {len(scenarios)} representative offline component scenario(s).",
+        code="III_FIELD_OFFLINE_VERIFIED",
+        target=selected["endpoint"],
+        profile=selected["runtime_profile"],
+        release_id=releases[-1]["release_id"],
+        evidence=(str(path), str(readiness_path), report["verification_id"]),
+        payload_schema=report["schema"],
+        payload=report,
+        terminal_reason="All inputs came from authenticated local caches; no network or target mutation occurred.",
     )
 
 
@@ -421,6 +528,22 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     prepare_parser.add_argument("--target", choices=("sim", "real"), default="real")
     _release_options(prepare_parser)
     prepare_parser.set_defaults(func=prepare, _iii_mutating=True)
+
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="prove representative offline component packaging from prepared caches",
+    )
+    verify_parser.add_argument(
+        "version", nargs="+", help="qualified SemVer tag(s) already prepared locally"
+    )
+    verify_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="require network-free, target-free cache verification",
+    )
+    verify_parser.add_argument("--target", choices=("sim", "real"), default="real")
+    _release_options(verify_parser)
+    verify_parser.set_defaults(func=verify_offline, _iii_mutating=False)
 
     check_parser = subparsers.add_parser(
         "check", help="seal a read-only connected-system readiness record"

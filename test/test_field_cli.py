@@ -5,9 +5,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from iii import field, registry, release
+from iii.__main__ import build_parser
+from iii.runner import inventory_parser
 
 
 RELEASE_ID = "a" * 64
+
+
+def test_field_parser_declares_offline_verify_read_only() -> None:
+    inventory = inventory_parser(build_parser())
+    assert inventory[("field", "verify")].mutating is False
 
 
 def target():
@@ -118,6 +125,60 @@ def test_invalid_cached_status_signature_is_visible_failure(monkeypatch, tmp_pat
     result = field.prepare(prepare_args(tmp_path, offline=True))
     assert result.outcome.value == "rejected"
     assert "signature is invalid" in result.findings[0].message
+
+
+def verify_args(tmp_path: Path, *, offline: bool = True):
+    return SimpleNamespace(
+        target="real",
+        version=["v1.2.3"],
+        offline=offline,
+        _iii_environment={
+            "III_OPERATION_STATE_DIR": str(tmp_path / "operations"),
+            "III_REGISTRY_ROOT": str(tmp_path / "registry"),
+        },
+    )
+
+
+def test_offline_verify_proves_gc_drone_and_paired_without_network_or_target(
+    monkeypatch, tmp_path
+):
+    value = cached(tmp_path)
+    source = SimpleNamespace(
+        latest_status_index=lambda: (_ for _ in ()).throw(
+            AssertionError("offline verification must not use network")
+        )
+    )
+    monkeypatch.setattr(field, "_target", lambda _args: target())
+    monkeypatch.setattr(release, "_runtime", lambda _args: {"source": source})
+    monkeypatch.setattr(release, "_load_cached", lambda *_args: value)
+    result = field.verify_offline(verify_args(tmp_path))
+    assert result.outcome.value == "success"
+    assert result.code == "III_FIELD_OFFLINE_VERIFIED"
+    assert [row["scenario"] for row in result.payload["scenarios"]] == [
+        "gc-only",
+        "drone-only",
+        "paired",
+    ]
+    assert all(row["network_access"] is False for row in result.payload["scenarios"])
+    assert all(row["target_mutation"] is False for row in result.payload["scenarios"])
+    assert Path(result.evidence[0]).is_file()
+
+
+def test_field_verify_requires_explicit_offline_and_complete_pair(
+    monkeypatch, tmp_path
+):
+    value = cached(tmp_path)
+    monkeypatch.setattr(field, "_target", lambda _args: target())
+    monkeypatch.setattr(release, "_runtime", lambda _args: {})
+    monkeypatch.setattr(release, "_load_cached", lambda *_args: value)
+    assert (
+        field.verify_offline(verify_args(tmp_path, offline=False)).outcome.value
+        == "rejected"
+    )
+    value.publication["components"] = {"gc": {}}
+    result = field.verify_offline(verify_args(tmp_path / "missing"))
+    assert result.outcome.value == "rejected"
+    assert "missing drone" in result.findings[0].message
 
 
 def observations(**changes):

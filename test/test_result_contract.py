@@ -217,12 +217,13 @@ def test_every_existing_parser_leaf_is_inventory_covered():
     assert all(spec.identity.startswith("iii ") for spec in inventory.values())
     assert {path[0] for path in inventory} == {
         "system",
-        "build",
         "deploy",
         "config",
         "release",
         "mission",
         "field",
+        "verify",
+        "docs",
         "logs",
         "records",
         "host",

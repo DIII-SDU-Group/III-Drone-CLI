@@ -161,6 +161,66 @@ mirror, clock, and browser behavior. QGroundControl remains exclusively under
 boundary and commissioning limits are in the workspace
 `docs/gc-host-provisioning.md` runbook.
 
+### Durable configuration captures
+
+`iii config capture` is the field/simulation surface for non-destructive tuning
+evidence. `pull` accepts repeated `--snapshot`, `--name`, and `--description`
+arguments in matching order, seals each set under `.iii/captures/`, and never
+loads or selects it on the target. `list`, `show`, `diff`, and `verify` are
+read-only. `export` and `import` use deterministic checksummed archives with
+verified deduplication. `delete` normally requires `--capture-id`; `--force` is
+separate and requires `--confirm-snapshot delete:<exact-snapshot-id>` in addition
+to the universal retained-plan confirmation.
+
+Pull and import keep canonical progress records under `.iii/captures/.partial/`
+until every selected capture is durable. Failures remain visibly `interrupted`,
+and retry resumes through immutable-content deduplication. Export fsyncs an
+adjacent hidden `*.partial` file before atomically publishing the requested name,
+so an interruption cannot leave a final archive that appears complete.
+
+Use `--target real` for `iii.local` and `--target sim` for the local runtime.
+An explicit `III_RUNTIME_API_URL` overrides only the transport locator; the
+runtime's authenticated profile must still match the requested target.
+
+Promotion remains separate from capture. `iii config promotion plan` performs a
+read-only three-way comparison among the recorded field baseline, capture, and
+current tracked default. `apply` requires explicit `--key` entries plus
+`--classification shared-tracked-default`; every unselected difference remains
+capture evidence and deprecated/removed/unknown selections fail closed. Both the
+capture release ID and workspace ancestry must authenticate against the normal
+feature branch.
+
+`apply --commit` writes only the selected real or sim default and its package
+manifest hashes, then creates exact Configuration-submodule and workspace
+gitlink/lock commits. Its result includes the canonical stacked-PR command; it
+does not bypass that script or commit to `develop`, `main`, or `release`.
+
+### Deployment verification
+
+`iii verify deployment --root <workspace>` audits the reviewed Q1-Q132 clause
+baseline, focused-owner coverage, task acceptance/test references, Q121 execution
+categories, and Q131 cutover rows. `--audit-only` validates definitions without
+claiming that unexecuted rows passed. Optional `--report` and `--junit` outputs are
+atomically written and preserve every `not_run`, skipped, warning, and failure.
+
+`--require-level` and `--require-complete` fail closed unless supplied
+`--evidence` records bind one exact candidate, current matrix/policy identities,
+an authorized signature for local target/physical runs, and the hashes of all
+referenced artifacts. See the workspace
+`docs/deployment-verification-matrix.md` runbook for candidate materialization and
+signed local acceptance.
+
+### Offline documentation validation
+
+`iii docs check --root <workspace>` deterministically validates the governed
+document inventory, editable-repository ownership, entrypoints and routers, local
+links and anchors, fenced III commands, forbidden retired terms, canonical
+authorities, exclusion policy, and generated CLI/schema references. It requires
+no network or aircraft and returns the same human/JSON outcome contract as every
+other III command. Regeneration is deliberately separate through the reviewed
+`update_documentation_references.py` and `update_documentation_manifest.py`
+scripts; check mode never rewrites source.
+
 ## Module Map
 
 - `__main__.py`: top-level argument parser and subcommand dispatcher
@@ -170,6 +230,10 @@ boundary and commissioning limits are in the workspace
 - `runtime_api_client.py`: HTTP client for remote `iii-runtime-api` runtime
   control and logs
 - `config.py`: launches or forwards the configuration client
+- `config_capture.py`: immutable tuning capture and portable archive operations
+- `config_promotion.py`: reviewed capture comparison and tracked-default promotion
+- `verification.py`: deployment matrix and authenticated evidence audit surface
+- `docs.py`: governed offline documentation and generated-reference validation
 - `build.py`: container-image, workspace, and cross-compilation build entry points
 - `deploy.py`: remote deployment/install helpers
 - `container_manager.py`: Docker Compose command wrapper used in host mode

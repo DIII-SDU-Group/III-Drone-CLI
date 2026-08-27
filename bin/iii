@@ -5,7 +5,15 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 CLI_DIR="$(dirname "$SCRIPT_DIR")"
 WORKSPACE_ROOT="$(cd "$CLI_DIR/../.." && pwd)"
 
-if [[ "${III_GC_CONTROLLER_BOOTSTRAPPED:-0}" != "1" && "${1:-}" == "gc" && "${2:-}" == "provision" ]]; then
+help_requested=0
+for argument in "$@"; do
+  if [[ "$argument" == "-h" || "$argument" == "--help" ]]; then
+    help_requested=1
+    break
+  fi
+done
+
+if [[ "$help_requested" == "0" && "${III_GC_CONTROLLER_BOOTSTRAPPED:-0}" != "1" && "${1:-}" == "gc" && "${2:-}" == "provision" ]]; then
   bootstrap_args=()
   for ((index=1; index <= $#; index++)); do
     if [[ "${!index}" == "--offline-cache" ]]; then

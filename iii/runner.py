@@ -230,20 +230,21 @@ def inventory_parser(
         for action in current._actions:
             if isinstance(action, argparse._SubParsersAction):
                 choices.update(action.choices)
+        if "func" in current._defaults:
+            spec = CommandSpec(
+                prefix,
+                bool(current._defaults.get("_iii_mutating", _is_mutating(prefix))),
+                bool(
+                    current._defaults.get("_iii_interactive", _is_interactive(prefix))
+                ),
+                current._defaults.get("_iii_plan_provider"),
+            )
+            current.set_defaults(_iii_command_spec=spec)
+            inventory[prefix] = spec
         if choices:
             for name, child in choices.items():
                 visit(child, (*prefix, name))
             return
-        if "func" not in current._defaults:
-            return
-        spec = CommandSpec(
-            prefix,
-            bool(current._defaults.get("_iii_mutating", _is_mutating(prefix))),
-            bool(current._defaults.get("_iii_interactive", _is_interactive(prefix))),
-            current._defaults.get("_iii_plan_provider"),
-        )
-        current.set_defaults(_iii_command_spec=spec)
-        inventory[prefix] = spec
 
     visit(parser, ())
     return inventory

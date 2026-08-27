@@ -24,10 +24,6 @@ from .runner import (
 )
 
 
-def _run_config() -> None:
-    import_module("iii.config").run()
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = ResultArgumentParser(prog="iii")
     add_universal_help(parser)
@@ -42,13 +38,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser_config = subparsers.add_parser(
         "config", help="Launches configuration manager"
     )
-    parser_config.set_defaults(func=lambda _args: _run_config(), action="run")
-
-    build = import_module("iii.build")
-    parser_build = subparsers.add_parser(
-        "build", help="Commands for building parts of the system"
+    config_commands = parser_config.add_subparsers(dest="config_command")
+    parser_config_sim = config_commands.add_parser(
+        "sim", help="inspect and recover this clone's living simulation configuration"
     )
-    build.initialize(parser_build)
+    import_module("iii.config_sim").initialize(parser_config_sim)
+    parser_config_capture = config_commands.add_parser(
+        "capture", help="capture, verify, compare, and transport field tuning evidence"
+    )
+    import_module("iii.config_capture").initialize(parser_config_capture)
+    parser_config_promotion = config_commands.add_parser(
+        "promotion", help="compare and promote reviewed captures into tracked defaults"
+    )
+    import_module("iii.config_promotion").initialize(parser_config_promotion)
 
     deploy = import_module("iii.deploy")
     parser_deploy = subparsers.add_parser(
@@ -73,6 +75,18 @@ def build_parser() -> argparse.ArgumentParser:
         "field", help="Commands for field preparation and readiness"
     )
     field.initialize(parser_field)
+
+    verification = import_module("iii.verification")
+    parser_verification = subparsers.add_parser(
+        "verify", help="Commands for governed verification matrices"
+    )
+    verification.initialize(parser_verification)
+
+    docs = import_module("iii.docs")
+    parser_docs = subparsers.add_parser(
+        "docs", help="Commands for governed offline documentation validation"
+    )
+    docs.initialize(parser_docs)
 
     logs = import_module("iii.logs")
     parser_logs = subparsers.add_parser(

@@ -454,6 +454,7 @@ def _activation(
     checkpoint: str,
     px4_activation_evidence: Mapping[str, Any],
     qualified: bool = False,
+    decisions: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     planning_action = "plan-activate" if action == "activate" else "plan-rollback"
     key = "activation" if action == "activate" else "rollback"
@@ -464,24 +465,152 @@ def _activation(
     }
     if action == "activate":
         parameters["explicit_qualified_action"] = qualified
+        if decisions:
+            parameters["configuration_reconciliation_decisions"] = dict(decisions)
     planned = _request(
         manager,
         action=planning_action,
         operation_id=operation_id,
         payload={key: parameters, "target": _binding(selected)},
     )
-    accepted = _request(
-        manager,
-        action=action,
-        operation_id=operation_id,
-        payload={"plan": planned["plan"]},
-        nonce=planned["nonce"],
-    )
+    preflight = planned.get("preflight")
+    accepted = None
+    if not isinstance(preflight, Mapping) or preflight.get("ready") is not False:
+        accepted = _request(
+            manager,
+            action=action,
+            operation_id=operation_id,
+            payload={"plan": planned["plan"]},
+            nonce=planned["nonce"],
+        )
     return {
         "receiver_plan": planned["plan"],
-        "preflight": planned.get("preflight"),
+        "preflight": preflight,
         "receiver_acceptance": accepted,
     }
+
+
+def _reconciliation_decisions(values: Sequence[str]) -> dict[str, str]:
+    decisions: dict[str, str] = {}
+    for value in values:
+        key, separator, decision = value.rpartition("=")
+        if (
+            not separator
+            or not key
+            or decision
+            not in {
+                "use_old",
+                "use_new_default",
+            }
+        ):
+            raise ValueError(
+                "--decision requires SET_REFERENCE:PARAMETER=use_old|use_new_default"
+            )
+        if key in decisions:
+            raise ValueError(f"configuration decision was repeated: {key}")
+        decisions[key] = decision
+    return dict(sorted(decisions.items()))
+
+
+def _retain_configuration_review(
+    *,
+    store: OperationStore,
+    identifier: str,
+    selected: Mapping[str, Any],
+    release_id: str,
+    checkpoint: str,
+    qualified: bool,
+    actual: Mapping[str, Any],
+    origin_command: str = "iii deploy activate",
+) -> tuple[Path, dict[str, Any]]:
+    preflight = actual.get("preflight")
+    reconciliation = (
+        preflight.get("configuration_reconciliation")
+        if isinstance(preflight, Mapping)
+        else None
+    )
+    if not isinstance(reconciliation, Mapping) or not reconciliation.get(
+        "review_items"
+    ):
+        reasons = (
+            preflight.get("rejection_reasons", [])
+            if isinstance(preflight, Mapping)
+            else []
+        )
+        raise ValueError(
+            "receiver activation preflight rejected: " + "; ".join(map(str, reasons))
+        )
+    review = {
+        "schema": "iii.configuration-reconciliation-review-request/v1",
+        "review_id": "0" * 64,
+        "operation_id": identifier,
+        "origin_command": origin_command,
+        "target": {
+            "endpoint": selected["endpoint"],
+            "logical_id": selected["logical_id"],
+            "runtime_profile": selected["runtime_profile"],
+        },
+        "release_id": release_id,
+        "source_configuration_checkpoint_id": checkpoint,
+        "explicit_qualified_action": qualified,
+        "receiver_plan_id": actual["receiver_plan"]["plan_id"],
+        "reconciliation": dict(reconciliation),
+    }
+    review["review_id"] = content_id(
+        {key: value for key, value in review.items() if key != "review_id"}
+    )
+    from iii_deployment.contracts import ContractRegistry
+
+    ContractRegistry(_workspace() / "deployment/schemas/v1").validate(
+        "configuration-reconciliation-review-request", review
+    )
+    path = store.write_record(
+        identifier, "configuration-reconciliation-review.json", review
+    )
+    return path, review
+
+
+def _configuration_review_result(
+    *,
+    command: str,
+    selected: Mapping[str, Any],
+    release_id: str,
+    identifier: str,
+    path: Path,
+    review: Mapping[str, Any],
+) -> CommandResult:
+    return CommandResult(
+        command=command,
+        outcome=Outcome.REJECTED,
+        summary="Activation is paused for explicit configuration reintroduction review.",
+        code="III_DEPLOY_CONFIGURATION_REVIEW_REQUIRED",
+        operation_id=identifier,
+        state="review-required",
+        target=selected["endpoint"],
+        profile=selected["runtime_profile"],
+        release_id=release_id,
+        findings=(
+            Finding(
+                "III_DEPLOY_CONFIGURATION_REVIEW_REQUIRED",
+                "Every reintroduced key requires use_old or use_new_default before receiver mutation.",
+            ),
+        ),
+        evidence=(str(path), review["review_id"]),
+        payload_schema=review["schema"],
+        payload=dict(review),
+        next_actions=(
+            NextAction(
+                ("iii", "deploy", "continue", identifier),
+                "Continue from this immutable review with one --decision per review item.",
+                mutating=True,
+                prerequisites=(
+                    "Review old value validity, new default, and provenance for every item.",
+                ),
+                confirmation_required=True,
+                operation_id=identifier,
+            ),
+        ),
+    )
 
 
 def _px4_activation_evidence(
@@ -516,6 +645,151 @@ def rollback(args: argparse.Namespace) -> CommandResult:
     return _activate_or_rollback(args, "rollback")
 
 
+def continue_configuration_review(args: argparse.Namespace) -> CommandResult:
+    from iii_deployment.contracts import ContractRegistry
+
+    selected = None
+    release_id = None
+    try:
+        selected = _target(args)
+        _require_remote(selected)
+        identifier, store = _operation(args)
+        review = store.load_record(
+            args.review_operation_id, "configuration-reconciliation-review.json"
+        )
+        if review is None:
+            raise ValueError("the referenced configuration review is unavailable")
+        expected_fields = {
+            "schema",
+            "review_id",
+            "operation_id",
+            "origin_command",
+            "target",
+            "release_id",
+            "source_configuration_checkpoint_id",
+            "explicit_qualified_action",
+            "receiver_plan_id",
+            "reconciliation",
+        }
+        if (
+            set(review) != expected_fields
+            or review["schema"] != "iii.configuration-reconciliation-review-request/v1"
+            or review["operation_id"] != args.review_operation_id
+            or review["origin_command"] != "iii deploy activate"
+            or review["review_id"]
+            != content_id(
+                {key: value for key, value in review.items() if key != "review_id"}
+            )
+        ):
+            raise ValueError("the retained configuration review is invalid or edited")
+        ContractRegistry(_workspace() / "deployment/schemas/v1").validate(
+            "configuration-reconciliation-review-request", review
+        )
+        if review["target"] != {
+            "endpoint": selected["endpoint"],
+            "logical_id": selected["logical_id"],
+            "runtime_profile": selected["runtime_profile"],
+        }:
+            raise ValueError("the retained review targets another endpoint or profile")
+        release_id = review["release_id"]
+        decisions = _reconciliation_decisions(args.decision)
+        items = review["reconciliation"].get("review_items")
+        if not isinstance(items, list):
+            raise ValueError("the retained review item inventory is malformed")
+        expected_decisions = {
+            f"{item['set_reference']}:{item['parameter']}"
+            for item in items
+            if isinstance(item, Mapping)
+            and isinstance(item.get("set_reference"), str)
+            and isinstance(item.get("parameter"), str)
+        }
+        if set(decisions) != expected_decisions or len(expected_decisions) != len(
+            items
+        ):
+            raise ValueError(
+                "decisions must cover every and only retained configuration review item"
+            )
+        px4_evidence = _px4_activation_evidence(
+            args, selected=selected, release_id=release_id
+        )
+        actual = _activation(
+            _manager(),
+            action="activate",
+            operation_id=identifier,
+            selected=selected,
+            release_id=release_id,
+            checkpoint=review["source_configuration_checkpoint_id"],
+            px4_activation_evidence=px4_evidence,
+            qualified=review["explicit_qualified_action"],
+            decisions=decisions,
+        )
+        if actual["receiver_acceptance"] is None:
+            path, refreshed = _retain_configuration_review(
+                store=store,
+                identifier=identifier,
+                selected=selected,
+                release_id=release_id,
+                checkpoint=review["source_configuration_checkpoint_id"],
+                qualified=review["explicit_qualified_action"],
+                actual=actual,
+            )
+            return _configuration_review_result(
+                command="iii deploy continue",
+                selected=selected,
+                release_id=release_id,
+                identifier=identifier,
+                path=path,
+                review=refreshed,
+            )
+        record = {
+            "schema": "iii.deployment-actual/v1",
+            "operation_id": identifier,
+            "release_id": release_id,
+            "target": selected,
+            "phases": [
+                {
+                    "name": "activate",
+                    "state": "accepted",
+                    "source_review_id": review["review_id"],
+                    "decisions": decisions,
+                    **actual,
+                }
+            ],
+            "px4_activation_evidence_id": px4_evidence["evidence_id"],
+            "px4_write_performed": False,
+        }
+        record["actual_id"] = content_id(record)
+        ContractRegistry(_workspace() / "deployment/schemas/v1").validate(
+            "deployment-actual", record
+        )
+        path = store.write_record(identifier, "deployment-actual.json", record)
+    except Exception as exc:
+        return _reject(
+            "iii deploy continue", exc, target=selected, release_id=release_id
+        )
+    return CommandResult(
+        command="iii deploy continue",
+        outcome=Outcome.SUCCESS,
+        summary=(
+            f"Configuration decisions were revalidated and release {release_id} "
+            "was accepted for detached activation."
+        ),
+        code="III_DEPLOY_CONFIGURATION_REVIEW_CONTINUED",
+        target=selected["endpoint"],
+        profile=selected["runtime_profile"],
+        release_id=release_id,
+        evidence=(str(path), review["review_id"], actual["receiver_plan"]["plan_id"]),
+        payload_schema="iii.deploy-configuration-review-continuation/v1",
+        payload={"review": review, "decisions": decisions, "activation": actual},
+        next_actions=(
+            NextAction(
+                ("iii", "deploy", "status", "--target", "real"),
+                "Verify the detached operation and paired configuration checkpoint.",
+            ),
+        ),
+    )
+
+
 def _activate_or_rollback(args: argparse.Namespace, action: str) -> CommandResult:
     from iii_deployment.contracts import ContractRegistry
 
@@ -538,7 +812,26 @@ def _activate_or_rollback(args: argparse.Namespace, action: str) -> CommandResul
             checkpoint=args.configuration_checkpoint_id,
             px4_activation_evidence=px4_evidence,
             qualified=getattr(args, "qualified", False),
+            decisions=_reconciliation_decisions(getattr(args, "decision", [])),
         )
+        if actual["receiver_acceptance"] is None:
+            path, review = _retain_configuration_review(
+                store=store,
+                identifier=identifier,
+                selected=selected,
+                release_id=args.release_id,
+                checkpoint=args.configuration_checkpoint_id,
+                qualified=getattr(args, "qualified", False),
+                actual=actual,
+            )
+            return _configuration_review_result(
+                command=f"iii deploy {action}",
+                selected=selected,
+                release_id=args.release_id,
+                identifier=identifier,
+                path=path,
+                review=review,
+            )
         record = {
             "schema": "iii.deployment-actual/v1",
             "operation_id": identifier,
@@ -948,7 +1241,33 @@ def field(args: argparse.Namespace) -> CommandResult:
                         release_id=release_id,
                         checkpoint=args.configuration_checkpoint_id,
                         px4_activation_evidence=px4_evidence,
+                        decisions=_reconciliation_decisions(
+                            getattr(args, "decision", [])
+                        ),
                     )
+                    if activated["receiver_acceptance"] is None:
+                        review_path, review = _retain_configuration_review(
+                            store=store,
+                            identifier=identifier,
+                            selected=selected,
+                            release_id=release_id,
+                            checkpoint=args.configuration_checkpoint_id,
+                            qualified=False,
+                            actual=activated,
+                            origin_command="iii deploy field",
+                        )
+                        phases.append(
+                            {
+                                "name": "configuration-review",
+                                "state": "review-required",
+                                "review_id": review["review_id"],
+                                "path": str(review_path),
+                            }
+                        )
+                        raise ValueError(
+                            "configuration reintroduction review is required; "
+                            "rerun the exact field deployment with one --decision per retained item"
+                        )
                     activated_terminal = _await_receiver_operation(
                         manager,
                         selected,
@@ -1373,21 +1692,54 @@ def initialize(parser: argparse.ArgumentParser) -> None:
             name, help=f"plan and accept receiver {name}"
         )
         action_parser.add_argument("release_id")
-        action_parser.add_argument("--configuration-checkpoint-id", required=True)
+        action_parser.add_argument(
+            "--configuration-checkpoint-id",
+            required=True,
+            help=(
+                "current/source checkpoint for activation; paired rollback checkpoint "
+                "for explicit rollback"
+            ),
+        )
         if name == "activate":
             action_parser.add_argument(
                 "--qualified",
                 action="store_true",
                 help="declare explicit qualified activation authority",
             )
+            action_parser.add_argument(
+                "--decision",
+                action="append",
+                default=[],
+                metavar="SET:PARAMETER=CHOICE",
+                help="resolve one reviewed reintroduction with use_old or use_new_default",
+            )
         _target_option(action_parser, default="real")
         action_parser.set_defaults(func=handler, _iii_mutating=True)
+
+    continue_parser = subparsers.add_parser(
+        "continue", help="continue a retained configuration reintroduction review"
+    )
+    continue_parser.add_argument("review_operation_id")
+    continue_parser.add_argument(
+        "--decision",
+        action="append",
+        default=[],
+        required=True,
+        metavar="SET:PARAMETER=CHOICE",
+        help="resolve one exact retained review item with use_old or use_new_default",
+    )
+    _target_option(continue_parser, default="real")
+    continue_parser.set_defaults(func=continue_configuration_review, _iii_mutating=True)
 
     field_parser = subparsers.add_parser(
         "field", help="deploy one field-development bundle set"
     )
     field_parser.add_argument("--bundle-set", required=True, type=Path)
-    field_parser.add_argument("--configuration-checkpoint-id", required=True)
+    field_parser.add_argument(
+        "--configuration-checkpoint-id",
+        required=True,
+        help="currently selected source checkpoint reconciled by receiver activation",
+    )
     field_parser.add_argument("--status-index", type=Path)
     field_parser.add_argument(
         "--trusted-signers", type=Path, help="field bundle signer trust store"
@@ -1398,6 +1750,13 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     field_parser.add_argument("--include-mission", action="append", default=[])
     field_parser.add_argument("--exclude-mission", action="append", default=[])
     field_parser.add_argument("--activate", action="store_true")
+    field_parser.add_argument(
+        "--decision",
+        action="append",
+        default=[],
+        metavar="SET:PARAMETER=CHOICE",
+        help="resolve reviewed reintroduction values during drone activation",
+    )
     field_parser.add_argument(
         "--gc-override-reason",
         help="separately audited GC recovery reason when receiver safety is unavailable",

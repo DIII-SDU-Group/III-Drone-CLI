@@ -10,6 +10,8 @@ import pytest
 from iii.__main__ import main
 from iii import deploy
 from iii.operation import OperationStore, create_plan
+from iii.runner import inventory_parser
+from iii.__main__ import build_parser
 
 IDENTITY = "a" * 64
 CHECKPOINT = "b" * 64
@@ -121,6 +123,105 @@ def test_legacy_destructive_sync_is_unavailable(monkeypatch, tmp_path):
     status = main(["deploy", "synchronize", "--json"], stdout=output, stderr=StringIO())
     assert status == 64
     assert json.loads(output.getvalue())["code"] == "III_USAGE_ERROR"
+
+
+def test_deploy_continue_is_a_declared_mutating_leaf():
+    inventory = inventory_parser(build_parser())
+    assert inventory[("deploy", "continue")].mutating is True
+
+
+def test_configuration_review_is_retained_and_continued_with_exact_decisions(
+    monkeypatch, tmp_path
+):
+    class ReviewManager(Manager):
+        def receiver_request(self, request):
+            self.order.append(request["action"])
+            if request["action"] == "plan-activate":
+                activation = request["payload"]["activation"]
+                decisions = activation.get("configuration_reconciliation_decisions", {})
+                key = "tracked/default.yaml:/review_fixture/gain"
+                return {
+                    "plan": {
+                        "plan_id": "f" * 64,
+                        "action": "activate",
+                        "parameters": activation,
+                    },
+                    "nonce": "1" * 64,
+                    "preflight": {
+                        "ready": decisions == {key: "use_old"},
+                        "rejection_reasons": (
+                            [] if decisions else ["configuration review is unresolved"]
+                        ),
+                        "configuration_reconciliation": {
+                            "schema": "iii.receiver-configuration-reconciliation-preflight/v1",
+                            "ready": bool(decisions),
+                            "reconciliation_plan": {
+                                "plan_id": "2" * 64,
+                                "initial_state_id": "3" * 64,
+                            },
+                            "review_items": [
+                                {
+                                    "set_reference": "tracked/default.yaml",
+                                    "parameter": "/review_fixture/gain",
+                                    "old_canonical_value": 7.0,
+                                    "new_default": 3.0,
+                                    "old_value_valid": True,
+                                    "old_value_selectable": True,
+                                }
+                            ],
+                            "rejection_reasons": (
+                                [] if decisions else ["review required"]
+                            ),
+                        },
+                    },
+                }
+            if request["action"] == "activate":
+                return {"detached": True, "operation": {"state": "accepted"}}
+            return super().receiver_request(request)
+
+    order = []
+    manager = ReviewManager(order)
+    environment = {"III_OPERATION_STATE_DIR": str(tmp_path / "operations")}
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+    monkeypatch.setattr(deploy, "_manager", lambda: manager)
+    monkeypatch.setattr(
+        deploy,
+        "_px4_activation_evidence",
+        lambda *_args, **_kwargs: px4_activation_evidence(),
+    )
+    first = deploy.activate(
+        SimpleNamespace(
+            target="real",
+            release_id=IDENTITY,
+            configuration_checkpoint_id=CHECKPOINT,
+            qualified=False,
+            decision=[],
+            _iii_operation_id="iii-review-source-0001",
+            _iii_environment=environment,
+        )
+    )
+    assert first.outcome.value == "rejected"
+    assert first.code == "III_DEPLOY_CONFIGURATION_REVIEW_REQUIRED"
+    review_path = (
+        tmp_path
+        / "operations/iii-review-source-0001/configuration-reconciliation-review.json"
+    )
+    review = json.loads(review_path.read_text())
+    assert review["origin_command"] == "iii deploy activate"
+    assert order == ["plan-activate"]
+
+    continued = deploy.continue_configuration_review(
+        SimpleNamespace(
+            target="real",
+            review_operation_id="iii-review-source-0001",
+            decision=["tracked/default.yaml:/review_fixture/gain=use_old"],
+            _iii_operation_id="iii-review-continue-0001",
+            _iii_environment=environment,
+        )
+    )
+    assert continued.outcome.value == "success", continued.findings[0].message
+    assert continued.code == "III_DEPLOY_CONFIGURATION_REVIEW_CONTINUED"
+    assert order == ["plan-activate", "plan-activate", "activate"]
 
 
 def test_field_dry_run_retains_exact_plan_without_reading_bundle(monkeypatch, tmp_path):

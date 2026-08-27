@@ -203,3 +203,43 @@ def test_gc_help_parser_is_ros_free_in_an_isolated_python_process():
     payload = json.loads(completed.stdout)
     assert payload["command"] == "iii gc provision --help"
     assert payload["outcome"] == "success"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["gc", "provision", "--help"],
+        ["gc", "provision", "--json", "-h"],
+    ],
+)
+def test_source_wrapper_help_never_bootstraps_gc_controller(
+    tmp_path: Path, arguments: list[str]
+) -> None:
+    cli_root = Path(__file__).parents[1]
+    invoked = tmp_path / "python-arguments"
+    python = tmp_path / "python3"
+    python.write_text(
+        '#!/bin/sh\n/bin/printf \'%s\\n\' "$@" > "$III_TEST_ARGS"\n',
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    environment = {
+        "PATH": f"{tmp_path}:/usr/bin:/bin",
+        "III_TEST_ARGS": str(invoked),
+    }
+
+    completed = subprocess.run(
+        [str(cli_root / "bin/iii"), *arguments],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert invoked.read_text(encoding="utf-8").splitlines() == [
+        "-m",
+        "iii",
+        *arguments,
+    ]
