@@ -123,6 +123,19 @@ authentication. The forced remote gateway accepts canonical receiver requests
 and resumable SFTP into one release-specific incoming partial only. It is not a
 general shell, source synchronization, SCP, or remote-administration surface.
 
+Aircraft network changes use the same retained operation contract:
+
+```bash
+iii host network apply --input .iii/operator-network.json --target real --dry-run
+iii host network confirm --network-operation-id <apply-operation-id> --target real --dry-run
+iii host network status --network-operation-id <apply-operation-id> --target real
+```
+
+The input must be owner-only and Git-ignored. Plans/results redact SSIDs and
+passphrases. Apply always preserves Ethernet DHCP and arms a fixed onboard
+90-second monotonic rollback timer; the separately authenticated confirmation
+commits the candidate profile after reconnection.
+
 ## Module Map
 
 - `__main__.py`: top-level argument parser and subcommand dispatcher
@@ -138,6 +151,7 @@ general shell, source synchronization, SCP, or remote-administration surface.
 - `tmux_handler.py`: tmux session management
 - `ssh_manager.py`: fixed-endpoint receiver requests and content-bound resumable
   SFTP bundle transfer
+- `network.py`: redacted plan/apply, onboard confirmation, and rollback status
 
 ## Tests
 

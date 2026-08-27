@@ -691,9 +691,10 @@ def _image_common(parser: argparse.ArgumentParser) -> None:
 
 def initialize(parser: argparse.ArgumentParser) -> None:
     commands = parser.add_subparsers(dest="host_command")
-    from . import host_maintenance
+    from . import host_maintenance, network
 
     host_maintenance.initialize(commands)
+    network.initialize(commands)
     inspect_parser = commands.add_parser(
         "inspect", help="inspect shared aircraft hardware roles without mutation"
     )
