@@ -391,6 +391,70 @@ def test_authentication_and_connectivity_failures_are_distinct_and_redacted(
     assert private.read_text() not in str(failure.value)
 
 
+def test_receiver_rejection_uses_canonical_stdout_despite_remote_warning(
+    tmp_path: Path,
+) -> None:
+    private, public = _identity(tmp_path)
+    response = {
+        "schema": "iii.receiver-response/v1",
+        "ok": False,
+        "error": {
+            "code": "III_RECEIVER_STATE_UNAVAILABLE",
+            "message": "no active release is selected",
+        },
+    }
+
+    def reject(argv, **_kwargs):
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            canonical_json(response) + b"\n",
+            b"bash: warning: setlocale: LC_ALL: cannot change locale\n",
+        )
+
+    manager = SSHManager(
+        identity_file=private,
+        public_key_file=public,
+        runner=reject,
+    )
+    with pytest.raises(SSHAdapterError) as failure:
+        manager.verify_logical_target(profile="real", operation_id="target-probe-0004")
+    assert failure.value.code == "III_RECEIVER_REJECTED"
+    assert str(failure.value) == "no active release is selected"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"schema": "iii.receiver-response/v1", "ok": True, "result": {}},
+        {
+            "schema": "iii.bundle-upload-result/v1",
+            "ok": False,
+            "error": {"message": "not a receiver response"},
+        },
+        {"schema": "iii.receiver-response/v1", "ok": False},
+    ],
+)
+def test_nonzero_ssh_accepts_only_a_canonical_receiver_rejection(
+    tmp_path: Path, response: dict[str, object]
+) -> None:
+    private, public = _identity(tmp_path)
+
+    def reject(argv, **_kwargs):
+        return subprocess.CompletedProcess(
+            argv, 1, canonical_json(response) + b"\n", b"remote command failed"
+        )
+
+    manager = SSHManager(
+        identity_file=private,
+        public_key_file=public,
+        runner=reject,
+    )
+    with pytest.raises(SSHAdapterError) as failure:
+        manager.verify_logical_target(profile="real", operation_id="target-probe-0005")
+    assert failure.value.code == "III_SSH_REMOTE_REJECTED"
+
+
 def test_unexpected_logical_runtime_and_arbitrary_commands_fail_closed(
     tmp_path: Path,
 ) -> None:

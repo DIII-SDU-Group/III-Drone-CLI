@@ -232,6 +232,7 @@ class SSHManager:
         *,
         input_bytes: bytes | None = None,
         timeout: float = 900.0,
+        accept_receiver_response: bool = False,
     ) -> subprocess.CompletedProcess:
         try:
             result = self.runner(
@@ -247,6 +248,24 @@ class SSHManager:
             ) from exc
         if result.returncode == 0:
             return result
+        if accept_receiver_response:
+            stdout = (
+                result.stdout
+                if isinstance(result.stdout, bytes)
+                else str(result.stdout or "").encode()
+            )
+            try:
+                response = json.loads(stdout)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                response = None
+            if (
+                isinstance(response, dict)
+                and response.get("schema") == "iii.receiver-response/v1"
+                and response.get("ok") is False
+                and isinstance(response.get("error"), dict)
+                and stdout == canonical_json(response) + b"\n"
+            ):
+                return result
         stderr = result.stderr
         if isinstance(stderr, bytes):
             detail = stderr.decode("utf-8", errors="replace")
@@ -276,7 +295,11 @@ class SSHManager:
         argv = ["ssh", *self._options(), self.endpoint]
         if original_command is not None:
             argv.append(original_command)
-        result = self._run(argv, input_bytes=input_bytes)
+        result = self._run(
+            argv,
+            input_bytes=input_bytes,
+            accept_receiver_response=original_command is None,
+        )
         raw = (
             result.stdout
             if isinstance(result.stdout, bytes)
