@@ -51,6 +51,7 @@ def test_lifecycle_plan_is_local_only_and_detects_stale_unit_state(
     assert plan["browser_automatic"] is False
     assert plan["units"][gc.TARGET_UNIT]["ActiveState"] == "inactive"
     assert set(plan["unit_definitions"]) == set(gc.MANAGED_UNITS)
+    assert "iii-gc-px4-parameters.service" in plan["unit_definitions"]
 
     states[gc.TARGET_UNIT]["ActiveState"] = "active"
     args = SimpleNamespace(

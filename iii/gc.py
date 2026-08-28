@@ -25,6 +25,7 @@ MANAGED_UNITS = (
     "iii-gc-discovery.service",
     "iii-gc-mirror.service",
     "iii-gc-clock.service",
+    "iii-gc-px4-parameters.service",
     BROWSER_UNIT,
 )
 
