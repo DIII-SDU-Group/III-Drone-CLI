@@ -1,4 +1,6 @@
 from pathlib import Path
+import os
+import subprocess
 from types import SimpleNamespace
 
 from iii import docs
@@ -20,6 +22,28 @@ def test_docs_check_validates_current_workspace_offline() -> None:
     assert result.code == "III_DOCS_OK"
     assert result.payload["errors"] == []
     assert result.payload["generated"] == 2
+
+
+def test_source_launcher_loads_workspace_deployment_without_inherited_pythonpath() -> None:
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    completed = subprocess.run(
+        [
+            str(ROOT / "tools/III-Drone-CLI/bin/iii"),
+            "docs",
+            "check",
+            "--root",
+            str(ROOT),
+            "--output=json",
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "III_DOCS_OK" in completed.stdout
 
 
 def test_docs_check_requires_a_governed_workspace(monkeypatch, tmp_path: Path) -> None:

@@ -26,10 +26,23 @@ if [[ "$help_requested" == "0" && "${III_GC_CONTROLLER_BOOTSTRAPPED:-0}" != "1" 
   exec python3 "$WORKSPACE_ROOT/deployment/scripts/bootstrap_gc_controller.py" "${bootstrap_args[@]}" -- "$@"
 fi
 
+SOURCE_PYTHONPATH="$CLI_DIR"
+for source_root in \
+  "$WORKSPACE_ROOT/deployment/src" \
+  "$WORKSPACE_ROOT/src/III-Drone-Contracts" \
+  "$WORKSPACE_ROOT/src/III-Drone-Configuration" \
+  "$WORKSPACE_ROOT/src/III-Drone-Runtime" \
+  "$WORKSPACE_ROOT/src/III-Drone-Supervision"
+do
+  if [[ -d "$source_root" ]]; then
+    SOURCE_PYTHONPATH="$SOURCE_PYTHONPATH:$source_root"
+  fi
+done
+
 if [[ -n "${PYTHONPATH:-}" ]]; then
-  export PYTHONPATH="$CLI_DIR:$PYTHONPATH"
+  export PYTHONPATH="$SOURCE_PYTHONPATH:$PYTHONPATH"
 else
-  export PYTHONPATH="$CLI_DIR"
+  export PYTHONPATH="$SOURCE_PYTHONPATH"
 fi
 
 exec python3 -m iii "$@"
