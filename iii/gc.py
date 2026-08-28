@@ -17,15 +17,18 @@ from .result import CommandResult, Finding, NextAction, Outcome
 
 TARGET_UNIT = "iii-gc.target"
 BROWSER_UNIT = "iii-gc-browser.service"
-MANAGED_UNITS = (
-    TARGET_UNIT,
-    "iii-gc-application-reconcile.service",
+TARGET_MEMBERS = (
     "iii-gc-proxy.service",
     "iii-gc-frontend.service",
     "iii-gc-discovery.service",
     "iii-gc-mirror.service",
     "iii-gc-clock.service",
     "iii-gc-px4-parameters.service",
+)
+MANAGED_UNITS = (
+    TARGET_UNIT,
+    "iii-gc-application-reconcile.service",
+    *TARGET_MEMBERS,
     BROWSER_UNIT,
 )
 
@@ -247,8 +250,10 @@ def lifecycle(args: argparse.Namespace) -> CommandResult:
         action = args.gc_action
         if action == "open":
             argv = ["systemctl", "--user", "start", TARGET_UNIT, BROWSER_UNIT]
+        elif action == "stop":
+            argv = ["systemctl", "--user", "stop", TARGET_UNIT, *TARGET_MEMBERS]
         else:
-            verb = {"start": "start", "stop": "stop", "restart": "restart"}[action]
+            verb = {"start": "start", "restart": "restart"}[action]
             argv = ["systemctl", "--user", verb, TARGET_UNIT]
         completed = subprocess.run(
             argv,
@@ -262,7 +267,26 @@ def lifecycle(args: argparse.Namespace) -> CommandResult:
             raise ValueError(
                 completed.stderr.strip() or "systemd user operation failed"
             )
-        state = _systemctl_show(TARGET_UNIT)
+        states = {
+            unit: _systemctl_show(unit) for unit in (TARGET_UNIT, *TARGET_MEMBERS)
+        }
+        state = states[TARGET_UNIT]
+        if action == "stop":
+            remaining = [
+                unit
+                for unit, value in states.items()
+                if value.get("ActiveState") != "inactive"
+            ]
+            if remaining:
+                raise ValueError(
+                    "GC local services remained active after stop: "
+                    + ", ".join(remaining)
+                )
+        elif state.get("ActiveState") != "active":
+            raise ValueError(
+                f"GC target did not become active after {action}: "
+                f"{state.get('ActiveState', 'unknown')}/{state.get('SubState', 'unknown')}"
+            )
     except Exception as exc:
         return _rejected(command, exc, next_command=("iii", "gc", "status"))
     return CommandResult(

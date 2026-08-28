@@ -67,11 +67,13 @@ def test_lifecycle_plan_is_local_only_and_detects_stale_unit_state(
 def test_start_and_open_touch_only_local_user_units(tmp_path, monkeypatch):
     _units(tmp_path)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(gc, "_systemctl_show", lambda _unit: _state())
+    states = {unit: _state() for unit in gc.MANAGED_UNITS}
+    monkeypatch.setattr(gc, "_systemctl_show", lambda unit: dict(states[unit]))
     commands = []
 
     def run(argv, **_kwargs):
         commands.append(argv)
+        states[gc.TARGET_UNIT] = _state(active="active", sub="active")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(gc.subprocess, "run", run)
@@ -95,6 +97,52 @@ def test_start_and_open_touch_only_local_user_units(tmp_path, monkeypatch):
         gc.BROWSER_UNIT,
     ]
     assert all("iii.local" not in part for command in commands for part in command)
+
+
+def test_lifecycle_rejects_false_success_and_stop_contains_every_target_member(
+    tmp_path, monkeypatch
+):
+    _units(tmp_path)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    states = {unit: _state() for unit in gc.MANAGED_UNITS}
+    monkeypatch.setattr(gc, "_systemctl_show", lambda unit: dict(states[unit]))
+    commands = []
+
+    def run(argv, **_kwargs):
+        commands.append(argv)
+        if argv[2] == "stop":
+            for unit in (gc.TARGET_UNIT, *gc.TARGET_MEMBERS):
+                states[unit] = _state()
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(gc.subprocess, "run", run)
+    start = gc.lifecycle(
+        SimpleNamespace(
+            gc_action="start",
+            _iii_retained_plan={"preflight": gc._lifecycle_plan("start")},
+            _iii_environment={},
+        )
+    )
+    assert start.outcome.value == "rejected"
+    assert "did not become active" in start.findings[0].message
+
+    for unit in (gc.TARGET_UNIT, *gc.TARGET_MEMBERS):
+        states[unit] = _state(active="active", sub="running")
+    stop = gc.lifecycle(
+        SimpleNamespace(
+            gc_action="stop",
+            _iii_retained_plan={"preflight": gc._lifecycle_plan("stop")},
+            _iii_environment={},
+        )
+    )
+    assert stop.outcome.value == "success"
+    assert commands[-1] == [
+        "systemctl",
+        "--user",
+        "stop",
+        gc.TARGET_UNIT,
+        *gc.TARGET_MEMBERS,
+    ]
 
 
 def test_lifecycle_plan_rejects_any_changed_managed_unit(tmp_path, monkeypatch):
