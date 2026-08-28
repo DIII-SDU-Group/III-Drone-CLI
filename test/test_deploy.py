@@ -116,6 +116,61 @@ class Manager:
         return {"detached": True, "operation": {"state": "accepted"}}
 
 
+def test_receiver_update_apply_uploads_plans_accepts_and_retains_exact_actual(
+    monkeypatch, tmp_path
+):
+    bundle = tmp_path / "receiver-update"
+    bundle.mkdir()
+    (bundle / "receiver-update.tar").write_bytes(b"receiver archive")
+    receiver_id = "7" * 64
+    generation = 2
+    order = []
+
+    class ReceiverManager(Manager):
+        def upload_receiver_update(self, received, **kwargs):
+            assert received == bundle
+            assert kwargs == {
+                "receiver_id": receiver_id,
+                "profile": "real",
+                "operation_id": "iii-receiver-update-0001",
+            }
+            order.append("receiver-transfer")
+            return Transfer()
+
+    manager = ReceiverManager(order)
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+    monkeypatch.setattr(deploy, "_manager", lambda: manager)
+    monkeypatch.setattr(
+        "iii_deployment.receiver.update.verify_receiver_update",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            manifest={"receiver_id": receiver_id, "generation": generation},
+            signature={},
+        ),
+    )
+    environment = {"III_OPERATION_STATE_DIR": str(tmp_path / "operations")}
+
+    result = deploy.receiver_update_apply(
+        SimpleNamespace(
+            target="real",
+            bundle=bundle,
+            trust=tmp_path / "trust.json",
+            _iii_operation_id="iii-receiver-update-0001",
+            _iii_environment=environment,
+        )
+    )
+
+    assert result.outcome.value == "success", result.findings
+    assert order == ["receiver-transfer", "plan-receiver-update", "receiver-update"]
+    actual = json.loads(
+        (tmp_path / "operations/iii-receiver-update-0001/receiver-update-actual.json").read_text()
+    )
+    assert actual == result.payload
+    assert actual["receiver_id"] == receiver_id
+    assert actual["generation"] == generation
+    assert actual["transfer"]["upload_id"] == IDENTITY
+    assert len(actual["actual_id"]) == 64
+
+
 def test_legacy_destructive_sync_is_unavailable(monkeypatch, tmp_path):
     monkeypatch.setenv("CLI_CONFIGURATION", "dev")
     monkeypatch.setenv("III_OPERATION_STATE_DIR", str(tmp_path))

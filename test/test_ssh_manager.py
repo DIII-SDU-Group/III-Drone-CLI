@@ -455,6 +455,88 @@ def test_nonzero_ssh_accepts_only_a_canonical_receiver_rejection(
     assert failure.value.code == "III_SSH_REMOTE_REJECTED"
 
 
+def test_receiver_update_transfer_uses_fixed_gateway_and_resumable_sftp(
+    tmp_path: Path,
+) -> None:
+    private, public = _identity(tmp_path)
+    bundle = tmp_path / "receiver"
+    bundle.mkdir()
+    receiver_id = "a" * 64
+    for name in (
+        "receiver-update.manifest.json",
+        "receiver-update.sig.json",
+        "receiver-update.tar",
+    ):
+        (bundle / name).write_text(f"{name}\n", encoding="utf-8")
+
+    class Runner:
+        def __init__(self):
+            self.calls = []
+            self.manifest = None
+
+        def __call__(self, argv, **kwargs):
+            self.calls.append((list(argv), kwargs))
+            if argv[0] == "sftp":
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
+            command = argv[-1] if argv[-1].startswith("iii-receiver-upload ") else None
+            if command is None:
+                response = {
+                    "schema": "iii.receiver-response/v1",
+                    "ok": True,
+                    "result": {
+                        "schema": "iii.receiver-result/v1",
+                        "target": {"logical_id": "drone", "profile": "real"},
+                    },
+                }
+            elif command.startswith("iii-receiver-upload begin "):
+                self.manifest = json.loads(kwargs["input"])
+                response = self.status(complete=False, resumed=True)
+            elif command.startswith("iii-receiver-upload finalize "):
+                response = self.status(complete=True, resumed=False)
+            else:
+                raise AssertionError(argv)
+            return subprocess.CompletedProcess(
+                argv, 0, canonical_json(response) + b"\n", b""
+            )
+
+        def status(self, *, complete, resumed):
+            return {
+                "schema": "iii.receiver-update-upload-result/v1",
+                "receiver_id": receiver_id,
+                "upload_id": self.manifest["upload_id"],
+                "state": "complete" if complete else "partial",
+                "resumed": resumed,
+                "files": {
+                    item["path"]: (
+                        {"size": item["size"], "sha256": item["sha256"]}
+                        if complete
+                        else {"size": 0, "sha256": None}
+                    )
+                    for item in self.manifest["files"]
+                },
+            }
+
+    runner = Runner()
+    manager = SSHManager(identity_file=private, public_key_file=public, runner=runner)
+    transfer = manager.upload_receiver_update(
+        bundle,
+        receiver_id=receiver_id,
+        profile="real",
+        operation_id="receiver-update-0001",
+    )
+    assert transfer.receiver_id == receiver_id
+    assert transfer.resumed is True
+    commands = [call[0][-1] for call in runner.calls if call[0][0] == "ssh"]
+    assert commands[-2:] == [
+        f"iii-receiver-upload begin {receiver_id}",
+        f"iii-receiver-upload finalize {receiver_id}",
+    ]
+    sftp = next(call for call in runner.calls if call[0][0] == "sftp")
+    assert f'"receiver-{receiver_id}.partial/bundle/receiver-update.tar"' in sftp[1][
+        "input"
+    ].decode()
+
+
 def test_unexpected_logical_runtime_and_arbitrary_commands_fail_closed(
     tmp_path: Path,
 ) -> None:

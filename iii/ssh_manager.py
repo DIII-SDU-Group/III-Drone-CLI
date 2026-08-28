@@ -38,6 +38,15 @@ STATUS_INDEX_NAME = "release-status-index.json"
 TRANSFER_TARGET_S = 120.0
 BACKUP_UPLOAD_SCHEMA = "iii.portable-backup-upload/v1"
 BACKUP_UPLOAD_RESULT_SCHEMA = "iii.portable-backup-upload-result/v1"
+RECEIVER_UPDATE_UPLOAD_SCHEMA = "iii.receiver-update-upload/v1"
+RECEIVER_UPDATE_UPLOAD_RESULT_SCHEMA = "iii.receiver-update-upload-result/v1"
+RECEIVER_UPDATE_FILES = frozenset(
+    {
+        "receiver-update.manifest.json",
+        "receiver-update.sig.json",
+        "receiver-update.tar",
+    }
+)
 
 
 def canonical_json(value: Any) -> bytes:
@@ -83,6 +92,30 @@ class TransferResult:
 
     def as_dict(self) -> dict[str, Any]:
         return {"schema": "iii.ssh-bundle-transfer-result/v1", **self.__dict__}
+
+
+@dataclass(frozen=True)
+class ReceiverUpdateTransferResult:
+    receiver_id: str
+    upload_id: str
+    transfer_id: str
+    endpoint: str
+    expected_profile: str
+    resumed: bool
+    bytes_total: int
+    bytes_transferred: int
+    elapsed_s: float
+    target_s: float
+    target_met: bool
+    server_host_authentication: str
+    logical_identity_checked: bool
+    physical_host_authenticated: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema": "iii.ssh-receiver-update-transfer-result/v1",
+            **self.__dict__,
+        }
 
 
 class SSHManager:
@@ -687,6 +720,180 @@ class SSHManager:
                 "portable backup upload result schema is unsupported",
             )
         return result
+
+    def _receiver_update_upload_control(
+        self,
+        action: str,
+        receiver_id: str,
+        *,
+        document: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if action not in {"begin", "inspect", "finalize"} or not IDENTITY.fullmatch(
+            receiver_id
+        ):
+            raise SSHAdapterError(
+                "III_SSH_RECEIVER_UPLOAD_INVALID",
+                "receiver update upload control arguments are invalid",
+            )
+        result = self._ssh(
+            original_command=f"iii-receiver-upload {action} {receiver_id}",
+            input_bytes=(
+                canonical_json(document) + b"\n" if document is not None else None
+            ),
+        )
+        if result.get("schema") != RECEIVER_UPDATE_UPLOAD_RESULT_SCHEMA:
+            raise SSHAdapterError(
+                "III_SSH_RESPONSE_INVALID",
+                "receiver update upload result schema is unsupported",
+            )
+        return result
+
+    @staticmethod
+    def _validate_receiver_update_status(
+        remote: Mapping[str, Any], manifest: Mapping[str, Any]
+    ) -> int:
+        if (
+            set(remote)
+            != {
+                "schema",
+                "receiver_id",
+                "upload_id",
+                "state",
+                "resumed",
+                "files",
+            }
+            or remote.get("schema") != RECEIVER_UPDATE_UPLOAD_RESULT_SCHEMA
+            or remote.get("receiver_id") != manifest["receiver_id"]
+            or remote.get("upload_id") != manifest["upload_id"]
+            or not isinstance(remote.get("resumed"), bool)
+        ):
+            raise SSHAdapterError(
+                "III_SSH_PARTIAL_MISMATCH",
+                "remote receiver update status is malformed",
+            )
+        observed = remote.get("files")
+        expected = {item["path"]: item for item in manifest["files"]}
+        if not isinstance(observed, dict) or set(observed) != set(expected):
+            raise SSHAdapterError(
+                "III_SSH_PARTIAL_MISMATCH",
+                "remote receiver update file inventory differs",
+            )
+        remaining = 0
+        for relative, local in expected.items():
+            value = observed[relative]
+            if not isinstance(value, dict) or set(value) != {"size", "sha256"}:
+                raise SSHAdapterError(
+                    "III_SSH_PARTIAL_MISMATCH",
+                    "remote receiver update file status is malformed",
+                )
+            size = value["size"]
+            if (
+                isinstance(size, bool)
+                or not isinstance(size, int)
+                or not 0 <= size <= local["size"]
+                or (size == local["size"] and value["sha256"] != local["sha256"])
+                or (size < local["size"] and value["sha256"] is not None)
+            ):
+                raise SSHAdapterError(
+                    "III_SSH_PARTIAL_MISMATCH",
+                    "remote receiver update partial differs from local identity",
+                )
+            remaining += local["size"] - size
+        return remaining
+
+    def upload_receiver_update(
+        self,
+        bundle: Path,
+        *,
+        receiver_id: str,
+        profile: str,
+        operation_id: str,
+    ) -> ReceiverUpdateTransferResult:
+        """Resume one exact signed receiver update through the fixed gateway."""
+
+        self.verify_logical_target(profile=profile, operation_id=operation_id)
+        if not IDENTITY.fullmatch(receiver_id):
+            raise SSHAdapterError(
+                "III_SSH_RECEIVER_UPLOAD_INVALID", "receiver update identity is invalid"
+            )
+        bundle = bundle.expanduser().absolute()
+        if bundle.is_symlink() or not bundle.is_dir():
+            raise SSHAdapterError(
+                "III_SSH_RECEIVER_UPLOAD_INVALID",
+                "receiver update bundle is unavailable or linked",
+            )
+        if {path.name for path in bundle.iterdir()} != RECEIVER_UPDATE_FILES:
+            raise SSHAdapterError(
+                "III_SSH_RECEIVER_UPLOAD_INVALID",
+                "receiver update bundle file set is not exact",
+            )
+        paths = {
+            f"bundle/{name}": bundle / name for name in RECEIVER_UPDATE_FILES
+        }
+        files = [
+            {"path": relative, **self._local_file(path)}
+            for relative, path in sorted(paths.items())
+        ]
+        manifest: dict[str, Any] = {
+            "schema": RECEIVER_UPDATE_UPLOAD_SCHEMA,
+            "upload_id": "0" * 64,
+            "receiver_id": receiver_id,
+            "client_id": self.client_id,
+            "files": files,
+        }
+        manifest["upload_id"] = content_identity(
+            {key: value for key, value in manifest.items() if key != "upload_id"}
+        )
+        started = self.monotonic()
+        remote = self._receiver_update_upload_control(
+            "begin", receiver_id, document=manifest
+        )
+        resumed = remote.get("resumed") is True
+        initial_remaining = self._validate_receiver_update_status(remote, manifest)
+        if remote.get("state") == "partial":
+            observed = remote["files"]
+            indexed = {item["path"]: item for item in files}
+            commands = []
+            for relative, local in sorted(paths.items()):
+                if observed[relative]["size"] == indexed[relative]["size"]:
+                    continue
+                commands.append(
+                    "reput -f "
+                    + self._sftp_quote(str(local))
+                    + " "
+                    + self._sftp_quote(
+                        f"receiver-{receiver_id}.partial/{relative}"
+                    )
+                )
+            if commands:
+                self._sftp(commands)
+            remote = self._receiver_update_upload_control("finalize", receiver_id)
+        if (
+            remote.get("state") != "complete"
+            or self._validate_receiver_update_status(remote, manifest) != 0
+        ):
+            raise SSHAdapterError(
+                "III_SSH_TRANSFER_INCOMPLETE",
+                "receiver update upload did not finalize exactly",
+            )
+        elapsed = self.monotonic() - started
+        total = sum(item["size"] for item in files)
+        return ReceiverUpdateTransferResult(
+            receiver_id=receiver_id,
+            upload_id=manifest["upload_id"],
+            transfer_id=manifest["upload_id"],
+            endpoint=self.endpoint,
+            expected_profile=profile,
+            resumed=resumed,
+            bytes_total=total,
+            bytes_transferred=initial_remaining,
+            elapsed_s=elapsed,
+            target_s=TRANSFER_TARGET_S,
+            target_met=elapsed <= TRANSFER_TARGET_S,
+            server_host_authentication="accepted-risk-none",
+            logical_identity_checked=True,
+            physical_host_authenticated=False,
+        )
 
     def upload_backup(
         self,

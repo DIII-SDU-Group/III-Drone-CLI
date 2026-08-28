@@ -329,6 +329,147 @@ def inspect(args: argparse.Namespace) -> CommandResult:
     )
 
 
+def receiver_update_inspect(args: argparse.Namespace) -> CommandResult:
+    from iii_deployment.contracts import ContractRegistry
+    from iii_deployment.receiver.update import verify_receiver_update
+
+    try:
+        verified = verify_receiver_update(
+            args.bundle,
+            trust=args.trust,
+            registry=ContractRegistry(_workspace() / "deployment/schemas/v1"),
+        )
+    except Exception as exc:
+        return _reject("iii deploy receiver-update inspect", exc)
+    return CommandResult(
+        command="iii deploy receiver-update inspect",
+        outcome=Outcome.SUCCESS,
+        summary=(
+            f"Verified signed receiver generation {verified.manifest['generation']} "
+            f"({verified.manifest['receiver_id']})."
+        ),
+        code="III_RECEIVER_UPDATE_INSPECTED",
+        payload_schema="iii.receiver-update-inspection/v1",
+        payload={
+            "receiver_manifest": verified.manifest,
+            "receiver_signature": verified.signature,
+        },
+        terminal_reason=(
+            "The signed receiver payload and compatibility declaration were verified "
+            "locally without target mutation."
+        ),
+    )
+
+
+def receiver_update_apply(args: argparse.Namespace) -> CommandResult:
+    from iii_deployment.contracts import ContractRegistry
+    from iii_deployment.receiver.update import verify_receiver_update
+
+    selected = None
+    receiver_id = None
+    try:
+        selected = _target(args)
+        _require_remote(selected)
+        identifier, store = _operation(args)
+        verified = verify_receiver_update(
+            args.bundle,
+            trust=args.trust,
+            registry=ContractRegistry(_workspace() / "deployment/schemas/v1"),
+        )
+        receiver_id = verified.manifest["receiver_id"]
+        manager = _manager()
+        transfer = manager.upload_receiver_update(
+            args.bundle,
+            receiver_id=receiver_id,
+            profile=selected["runtime_profile"],
+            operation_id=identifier,
+        )
+        archive_sha256 = hashlib.sha256(
+            (args.bundle / "receiver-update.tar").read_bytes()
+        ).hexdigest()
+        planned = _request(
+            manager,
+            action="plan-receiver-update",
+            operation_id=identifier,
+            payload={
+                "artifact": {
+                    "receiver_id": receiver_id,
+                    "generation": verified.manifest["generation"],
+                    "archive_sha256": archive_sha256,
+                    "upload_id": transfer.upload_id,
+                },
+                "target": _binding(selected),
+            },
+        )
+        accepted = _request(
+            manager,
+            action="receiver-update",
+            operation_id=identifier,
+            payload={"plan": planned["plan"]},
+            nonce=planned["nonce"],
+        )
+        actual = {
+            "schema": "iii.receiver-update-actual/v1",
+            "actual_id": "0" * 64,
+            "operation_id": identifier,
+            "receiver_id": receiver_id,
+            "generation": verified.manifest["generation"],
+            "target": selected,
+            "transfer": transfer.as_dict(),
+            "receiver_plan": planned["plan"],
+            "receiver_acceptance": accepted,
+        }
+        actual["actual_id"] = content_id(
+            {key: value for key, value in actual.items() if key != "actual_id"}
+        )
+        ContractRegistry(_workspace() / "deployment/schemas/v1").validate(
+            "receiver-update-actual", actual
+        )
+        path = store.write_record(
+            identifier, "receiver-update-actual.json", actual
+        )
+    except Exception as exc:
+        return _reject(
+            "iii deploy receiver-update apply", exc, target=selected
+        )
+    return CommandResult(
+        command="iii deploy receiver-update apply",
+        outcome=Outcome.SUCCESS,
+        summary=(
+            f"Receiver generation {actual['generation']} was transferred and "
+            "durably accepted for A/B handoff."
+        ),
+        code="III_RECEIVER_UPDATE_ACCEPTED",
+        target=selected["endpoint"],
+        profile=selected["runtime_profile"],
+        evidence=(
+            str(path),
+            actual["transfer"]["transfer_id"],
+            actual["receiver_plan"]["plan_id"],
+        ),
+        payload_schema="iii.receiver-update-actual/v1",
+        payload=actual,
+        next_actions=(
+            NextAction(
+                (
+                    "iii",
+                    "deploy",
+                    "status",
+                    "--target",
+                    str(selected["runtime_profile"]),
+                    "--operation",
+                    identifier,
+                ),
+                "Reattach after the receiver A/B handoff and verify its terminal state.",
+            ),
+        ),
+        terminal_reason=(
+            "The stable onboard bootstrap owns the selector switch, readiness "
+            "deadline, and automatic fallback independently of this CLI process."
+        ),
+    )
+
+
 def _stage_component(
     manager,
     component: Path,
@@ -1686,6 +1827,26 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     stage_parser.add_argument("--status-index", type=Path)
     _target_option(stage_parser, default="real")
     stage_parser.set_defaults(func=stage, _iii_mutating=True)
+
+    receiver_update = subparsers.add_parser(
+        "receiver-update", help="inspect or apply a signed receiver A/B update"
+    )
+    receiver_update_commands = receiver_update.add_subparsers(
+        dest="receiver_update_command"
+    )
+    receiver_inspect = receiver_update_commands.add_parser(
+        "inspect", help="verify a signed receiver update without mutation"
+    )
+    receiver_inspect.add_argument("bundle", type=Path)
+    receiver_inspect.add_argument("--trust", type=Path, required=True)
+    receiver_inspect.set_defaults(func=receiver_update_inspect, _iii_mutating=False)
+    receiver_apply = receiver_update_commands.add_parser(
+        "apply", help="transfer, plan, and accept a signed receiver A/B update"
+    )
+    receiver_apply.add_argument("bundle", type=Path)
+    receiver_apply.add_argument("--trust", type=Path, required=True)
+    _target_option(receiver_apply, default="real")
+    receiver_apply.set_defaults(func=receiver_update_apply, _iii_mutating=True)
 
     for name, handler in (("activate", activate), ("rollback", rollback)):
         action_parser = subparsers.add_parser(

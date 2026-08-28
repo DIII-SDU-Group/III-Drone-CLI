@@ -235,11 +235,12 @@ scripts; check mode never rewrites source.
 - `verification.py`: deployment matrix and authenticated evidence audit surface
 - `docs.py`: governed offline documentation and generated-reference validation
 - `build.py`: container-image, workspace, and cross-compilation build entry points
-- `deploy.py`: remote deployment/install helpers
+- `deploy.py`: retained application deployment and signed receiver A/B update
+  inspection, transfer, plan, acceptance, and status workflows
 - `container_manager.py`: Docker Compose command wrapper used in host mode
 - `tmux_handler.py`: tmux session management
 - `ssh_manager.py`: fixed-endpoint receiver requests and content-bound resumable
-  SFTP bundle transfer
+  application/receiver-update SFTP transfer through fixed gateway commands
 - `network.py`: redacted plan/apply, onboard confirmation, and rollback status
 
 ## Tests
