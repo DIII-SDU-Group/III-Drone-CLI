@@ -54,6 +54,19 @@ def _component(tmp_path: Path) -> Path:
     return root
 
 
+def test_default_identity_matches_gc_provisioning_contract(tmp_path: Path) -> None:
+    private, public = _identity(tmp_path)
+    expected = tmp_path / "config/iii/keys/ssh/id_ed25519"
+    expected.parent.mkdir(parents=True)
+    private.replace(expected)
+    public.replace(Path(str(expected) + ".pub"))
+
+    manager = SSHManager(environment={"XDG_CONFIG_HOME": str(tmp_path / "config")})
+
+    assert manager.identity_file == expected
+    assert manager.public_key_file == Path(str(expected) + ".pub")
+
+
 class GatewayRunner:
     def __init__(
         self,

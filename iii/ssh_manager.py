@@ -145,7 +145,7 @@ class SSHManager:
                     Path(
                         environment.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
                     )
-                    / "iii/credentials/ssh_ed25519"
+                    / "iii/keys/ssh/id_ed25519"
                 ),
             )
         )
