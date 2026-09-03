@@ -16,7 +16,6 @@ from iii.ssh_manager import (
     canonical_json,
 )
 
-
 RELEASE = "a" * 64
 
 
@@ -171,7 +170,7 @@ def test_key_only_fixed_endpoint_options_never_forward_agent_or_use_password(
     manager.verify_logical_target(profile="real", operation_id="target-probe-0001")
     argv = runner.calls[0][0]
     serialized = " ".join(argv)
-    assert argv[0] == "ssh" and argv[-1] == "iii@iii.local"
+    assert argv[0] == "ssh" and argv[-1] == "iii-deploy@iii.local"
     assert "BatchMode=yes" in argv
     assert "PasswordAuthentication=no" in argv
     assert "KbdInteractiveAuthentication=no" in argv
@@ -204,7 +203,7 @@ def test_complete_bundle_upload_is_resumable_fixed_root_and_records_budget(
     result = manager.upload_bundle(
         _component(tmp_path), release_id=RELEASE, profile="real"
     )
-    assert result.endpoint == "iii@iii.local"
+    assert result.endpoint == "iii-deploy@iii.local"
     assert result.elapsed_s == 15.0 and result.target_met is True
     assert result.content_addressed_optimization_justified is False
     assert result.optimization_assessment == "not-justified-target-met"
@@ -545,9 +544,10 @@ def test_receiver_update_transfer_uses_fixed_gateway_and_resumable_sftp(
         f"iii-receiver-upload finalize {receiver_id}",
     ]
     sftp = next(call for call in runner.calls if call[0][0] == "sftp")
-    assert f'"receiver-{receiver_id}.partial/bundle/receiver-update.tar"' in sftp[1][
-        "input"
-    ].decode()
+    assert (
+        f'"receiver-{receiver_id}.partial/bundle/receiver-update.tar"'
+        in sftp[1]["input"].decode()
+    )
 
 
 def test_unexpected_logical_runtime_and_arbitrary_commands_fail_closed(

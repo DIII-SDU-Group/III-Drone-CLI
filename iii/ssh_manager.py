@@ -16,9 +16,8 @@ import subprocess
 import time
 from typing import Any, Callable, Mapping
 
-
 HOST = "iii.local"
-USER = "iii"
+USER = "iii-deploy"
 PROFILE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 IDENTITY = re.compile(r"^[a-f0-9]{64}$")
 OPERATION_ID = re.compile(r"^[a-z0-9][a-z0-9-]{7,63}$")
@@ -136,7 +135,7 @@ class SSHManager:
         if host != HOST or user != USER:
             raise SSHAdapterError(
                 "III_SSH_TARGET_REJECTED",
-                "deployment SSH is fixed to the unprivileged iii@iii.local endpoint",
+                "deployment SSH is fixed to the unprivileged iii-deploy@iii.local endpoint",
             )
         default_identity = Path(
             environment.get(
@@ -827,9 +826,7 @@ class SSHManager:
                 "III_SSH_RECEIVER_UPLOAD_INVALID",
                 "receiver update bundle file set is not exact",
             )
-        paths = {
-            f"bundle/{name}": bundle / name for name in RECEIVER_UPDATE_FILES
-        }
+        paths = {f"bundle/{name}": bundle / name for name in RECEIVER_UPDATE_FILES}
         files = [
             {"path": relative, **self._local_file(path)}
             for relative, path in sorted(paths.items())
@@ -861,9 +858,7 @@ class SSHManager:
                     "reput -f "
                     + self._sftp_quote(str(local))
                     + " "
-                    + self._sftp_quote(
-                        f"receiver-{receiver_id}.partial/{relative}"
-                    )
+                    + self._sftp_quote(f"receiver-{receiver_id}.partial/{relative}")
                 )
             if commands:
                 self._sftp(commands)

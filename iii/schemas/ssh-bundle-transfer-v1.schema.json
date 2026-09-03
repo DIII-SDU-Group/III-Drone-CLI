@@ -10,7 +10,7 @@
     "release_id": {"$ref": "#/definitions/hash"},
     "upload_id": {"$ref": "#/definitions/hash"},
     "transfer_id": {"$ref": "#/definitions/hash"},
-    "endpoint": {"const": "iii@iii.local"},
+    "endpoint": {"const": "iii-deploy@iii.local"},
     "expected_profile": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$"},
     "resumed": {"type": "boolean"},
     "bytes_total": {"type": "integer", "minimum": 0},

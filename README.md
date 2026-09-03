@@ -50,7 +50,7 @@ The CLI behavior depends on `CLI_CONFIGURATION`:
 - `container`: runs against the local system daemon inside a containerized environment
 - `dev`: runs against the local system daemon inside the devcontainer
 - `remote`: uses `iii-runtime-api` for runtime-control commands and the key-only
-  `iii@iii.local` receiver gateway for deployment
+  `iii-deploy@iii.local` receiver gateway for deployment
 
 ## System Commands
 
