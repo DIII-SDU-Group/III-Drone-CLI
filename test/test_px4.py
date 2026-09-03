@@ -81,6 +81,15 @@ def test_parser_inventory_covers_every_px4_leaf_and_mutation_contract():
     assert leaves["promote"].mutating and leaves["promote"].plan_provider
     assert not leaves["pull"].mutating
     assert not leaves["verify"].mutating
+    release_leaves = {
+        path[-1]: spec
+        for path, spec in inventory.items()
+        if path[:2] == ("px4", "release")
+    }
+    assert set(release_leaves) == {"prepare", "audit"}
+    assert release_leaves["prepare"].mutating
+    assert release_leaves["prepare"].plan_provider
+    assert not release_leaves["audit"].mutating
 
 
 def test_pull_uses_canonical_result_contract(monkeypatch):
@@ -112,3 +121,33 @@ def test_apply_reauthenticates_exact_retained_plan_and_disarmed_target(monkeypat
     subject.adapter.status = lambda: {**preflight["status"], "armed": True}
     rejected = px4.apply(args)
     assert rejected.outcome.value == "rejected"
+
+
+def test_all_defaults_selects_complete_non_calibration_manifest_values():
+    class Store:
+        def load_capture(self, capture_id):
+            assert capture_id == "c" * 64
+            return {"snapshot_id": "s" * 64}
+
+        def load_snapshot(self, snapshot_id):
+            assert snapshot_id == "s" * 64
+            return {
+                "profile": "real",
+                "parameters": [
+                    {"name": "NAV_ACC_RAD"},
+                    {"name": "CAL_ACC0_ID"},
+                ],
+            }
+
+        def manifest(self, profile):
+            assert profile == "real"
+            return {
+                "parameters": [
+                    {"name": "NAV_ACC_RAD", "classification": "operator-tunable"},
+                    {"name": "CAL_ACC0_ID", "classification": "calibration-identity"},
+                    {"name": "MISSING", "classification": "release-required"},
+                ]
+            }
+
+    args = SimpleNamespace(capture_id="c" * 64, all_defaults=True, key=None)
+    assert px4._promotion_keys(Store(), args) == ["NAV_ACC_RAD"]

@@ -404,6 +404,30 @@ class SSHManager:
             )
         return result
 
+    def px4_audit(self, *, release_id: str, operation_id: str) -> dict[str, Any]:
+        """Request the receiver-owned, zero-write Ethernet PX4 release audit."""
+
+        if not IDENTITY.fullmatch(release_id) or not OPERATION_ID.fullmatch(operation_id):
+            raise SSHAdapterError(
+                "III_SSH_TARGET_REJECTED", "PX4 audit arguments are invalid"
+            )
+        result = self.receiver_request(
+            {
+                "protocol_version": "1",
+                "action": "px4-audit",
+                "operation_id": operation_id,
+                "client_id": self.client_id,
+                "payload": {"release_id": release_id},
+                "nonce": None,
+            }
+        )
+        px4_release = result.get("px4_release")
+        if not isinstance(px4_release, dict):
+            raise SSHAdapterError(
+                "III_SSH_RESPONSE_INVALID", "receiver PX4 audit result is malformed"
+            )
+        return px4_release
+
     def _upload_control(
         self,
         action: str,

@@ -66,21 +66,37 @@ def _reject(
     release_id: str | None = None,
 ) -> CommandResult:
     code = getattr(exc, "code", "III_DEPLOY_CONTRACT_REJECTED")
+    px4_required = code == "III_PX4_RELEASE_REQUIRED"
     return CommandResult(
         command=command,
         outcome=Outcome.REJECTED,
-        summary="The deployment operation was refused before unsafe mutation.",
+        summary=(
+            "The Pi release is staged, but PX4 must be brought to the paired release before activation."
+            if px4_required
+            else "The deployment operation was refused before unsafe mutation."
+        ),
         code=code,
         target=str(target["endpoint"]) if target else None,
         profile=str(target["runtime_profile"]) if target else None,
         release_id=release_id,
         findings=(Finding(code, str(exc)),),
-        next_actions=(
+        next_actions=((
+            NextAction(
+                (
+                    "iii", "px4", "release", "prepare",
+                    "--release-directory", "<qualified-px4-artifact>",
+                    "--destination", "<new-px4-media-directory>",
+                ),
+                "Prepare the exact PX4 firmware and microSD files, then follow the generated flashing instructions.",
+                mutating=True,
+                confirmation_required=True,
+            )
+        ) if px4_required else (
             NextAction(
                 ("iii", "deploy", "status", "--target", "real"),
                 "Inspect authenticated target and deployment state.",
             ),
-        ),
+        )),
     )
 
 
@@ -88,6 +104,10 @@ def _manager():
     from .ssh_manager import SSHManager
 
     return SSHManager()
+
+
+class PX4ReleaseRequiredError(ValueError):
+    code = "III_PX4_RELEASE_REQUIRED"
 
 
 def _request(
@@ -760,21 +780,30 @@ def _px4_activation_evidence(
     selected: Mapping[str, Any],
     release_id: str,
 ) -> dict[str, Any]:
-    """Capture the read-only, complete FMU inventory bound to activation."""
-
-    from .px4 import _store as px4_store
+    """Request the receiver-owned, read-only Ethernet FMU release audit."""
 
     parameter_profile = str(selected.get("parameter_profile", ""))
-    if parameter_profile not in {"real", "sim"}:
-        raise ValueError("deployment target lacks a supported PX4 parameter profile")
-    evidence = px4_store(args).activation_evidence(
-        parameter_profile,
-        release_id=release_id,
+    if parameter_profile != "real":
+        raise ValueError("deployment PX4 release audit requires the real target profile")
+    operation_id = getattr(args, "_iii_operation_id", None)
+    if not isinstance(operation_id, str):
+        raise ValueError("PX4 release audit requires a retained operation ID")
+    result = _manager().px4_audit(
+        release_id=release_id, operation_id=operation_id
     )
-    if evidence.get("healthy") is not True:
-        raise ValueError(
-            "PX4 activation inventory does not satisfy the release parameter manifest"
+    audit = result.get("audit")
+    evidence = result.get("activation_evidence")
+    if not isinstance(audit, dict) or audit.get("healthy") is not True:
+        findings = audit.get("findings", []) if isinstance(audit, dict) else []
+        codes = ", ".join(
+            str(item.get("code")) for item in findings if isinstance(item, dict)
         )
+        raise PX4ReleaseRequiredError(
+            "PX4 does not match the staged release"
+            + (f" ({codes})" if codes else "")
+        )
+    if not isinstance(evidence, dict) or evidence.get("healthy") is not True:
+        raise PX4ReleaseRequiredError("PX4 activation evidence is incomplete")
     return evidence
 
 

@@ -393,13 +393,22 @@ def _git(args: argparse.Namespace, *command: str) -> str:
 
 
 def promote_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    from iii_deployment.contracts import ContractRegistry, content_identity
+    from iii_deployment.px4_release import (
+        load_dds_contract,
+        validate_release_inputs,
+    )
+    from iii_deployment.px4_network import load_network_baseline
+
     store = _store(args)
-    promoted = store.promoted_manifest(args.capture_id, accepted_keys=args.key)
+    accepted_keys = _promotion_keys(store, args)
+    promoted = store.promoted_manifest(args.capture_id, accepted_keys=accepted_keys)
     profile = promoted["profile"]
     workspace = _workspace(args)
     if workspace is None:
         raise ValueError("PX4 promotion requires a workspace checkout")
     source = workspace / f"deployment/px4/{profile}.json"
+    firmware_source = workspace / "deployment/px4/firmware.json"
     try:
         source_manifest = json.loads(source.read_bytes())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -413,18 +422,44 @@ def promote_preflight(args: argparse.Namespace) -> dict[str, Any]:
         or branch.startswith("promote/")
     ):
         raise ValueError("PX4 promotion requires a normal feature branch")
-    if _git(args, "status", "--porcelain", "--", str(source)):
-        raise ValueError("PX4 manifest source is already modified")
+    if _git(args, "status", "--porcelain", "--", str(source), str(firmware_source)):
+        raise ValueError("PX4 manifest or firmware contract source is already modified")
+    registry = ContractRegistry(_resource_root(args, "schemas"))
+    firmware = json.loads(firmware_source.read_text(encoding="utf-8"))
+    firmware["parameter_manifest_id"] = promoted["manifest_id"]
+    firmware["spec_id"] = content_identity(
+        {key: value for key, value in firmware.items() if key != "spec_id"}
+    )
+    dds = load_dds_contract(workspace / "deployment/px4/dds-topics.json", registry)
+    network = load_network_baseline(
+        workspace / "deployment/px4/network-baseline.json",
+        schema_root=_resource_root(args, "schemas"),
+    )
+    registry.validate("px4-firmware-spec", firmware)
+    validate_release_inputs(
+        spec=firmware,
+        dds=dds,
+        network=network,
+        parameters=promoted,
+        registry=registry,
+    )
     return {
         "schema": "iii.px4-promote-preflight/v1",
         "branch": branch,
         "head": _git(args, "rev-parse", "HEAD"),
         "capture_id": args.capture_id,
-        "accepted_keys": sorted(args.key),
+        "accepted_keys": accepted_keys,
+        "all_defaults": bool(args.all_defaults),
         "source": str(source),
+        "firmware_source": str(firmware_source),
         "old_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "old_firmware_sha256": hashlib.sha256(firmware_source.read_bytes()).hexdigest(),
         "new_manifest_id": promoted["manifest_id"],
-        "mutations": [f"write reviewed keys to deployment/px4/{profile}.json"],
+        "new_spec_id": firmware["spec_id"],
+        "mutations": [
+            f"write reviewed keys to deployment/px4/{profile}.json",
+            "rebind deployment/px4/firmware.json to the promoted manifest",
+        ],
     }
 
 
@@ -451,6 +486,20 @@ def _atomic_document(path: Path, value: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _promotion_keys(store: Any, args: argparse.Namespace) -> list[str]:
+    if not args.all_defaults:
+        return sorted(args.key or [])
+    capture = store.load_capture(args.capture_id)
+    snapshot = store.load_snapshot(capture["snapshot_id"])
+    present = {item["name"] for item in snapshot["parameters"]}
+    return sorted(
+        item["name"]
+        for item in store.manifest(snapshot["profile"])["parameters"]
+        if item["classification"] != "calibration-identity"
+        and item["name"] in present
+    )
+
+
 def promote(args: argparse.Namespace) -> CommandResult:
     command = "iii px4 params promote"
     try:
@@ -460,8 +509,20 @@ def promote(args: argparse.Namespace) -> CommandResult:
         ):
             raise ValueError("PX4 promotion source or Git state changed")
         store = _store(args)
-        promoted = store.promoted_manifest(args.capture_id, accepted_keys=args.key)
+        accepted_keys = _promotion_keys(store, args)
+        promoted = store.promoted_manifest(args.capture_id, accepted_keys=accepted_keys)
         _atomic_document(Path(retained["preflight"]["source"]), promoted)
+        firmware_path = Path(retained["preflight"]["firmware_source"])
+        firmware = json.loads(firmware_path.read_text(encoding="utf-8"))
+        firmware["parameter_manifest_id"] = promoted["manifest_id"]
+        from iii_deployment.contracts import content_identity
+
+        firmware["spec_id"] = content_identity(
+            {key: value for key, value in firmware.items() if key != "spec_id"}
+        )
+        if firmware["spec_id"] != retained["preflight"]["new_spec_id"]:
+            raise ValueError("PX4 firmware binding changed after planning")
+        _atomic_document(firmware_path, firmware)
     except Exception as exc:
         return _rejected(command, "III_PX4_PROMOTE_REJECTED", exc)
     return _accepted(
@@ -473,7 +534,9 @@ def promote(args: argparse.Namespace) -> CommandResult:
             "capture_id": args.capture_id,
             "profile": promoted["profile"],
             "manifest_id": promoted["manifest_id"],
-            "accepted_keys": sorted(args.key),
+            "spec_id": firmware["spec_id"],
+            "accepted_keys": accepted_keys,
+            "all_defaults": bool(args.all_defaults),
             "committed": False,
             "pushed": False,
         },
@@ -481,8 +544,114 @@ def promote(args: argparse.Namespace) -> CommandResult:
     )
 
 
+def release_prepare_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    from iii_deployment.contracts import ContractRegistry
+    from iii_deployment.px4_release import load_firmware_spec
+
+    release_directory = Path(args.release_directory).expanduser().resolve()
+    destination = Path(args.destination).expanduser().resolve()
+    build_record = release_directory / "px4-firmware-build.json"
+    spec = load_firmware_spec(
+        release_directory / "firmware.json",
+        ContractRegistry(_resource_root(args, "schemas")),
+    )
+    firmware = release_directory / spec["build"]["artifact"]
+    if not build_record.is_file() or build_record.is_symlink():
+        raise ValueError("release directory lacks the PX4 firmware build record")
+    if not firmware.is_file() or firmware.is_symlink():
+        raise ValueError("release directory lacks the paired PX4 firmware")
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("PX4 preparation destination must not already exist")
+    return {
+        "schema": "iii.px4-release-prepare-plan/v1",
+        "release_directory": str(release_directory),
+        "destination": str(destination),
+        "spec_id": spec["spec_id"],
+        "build_record_sha256": hashlib.sha256(build_record.read_bytes()).hexdigest(),
+        "firmware_sha256": hashlib.sha256(firmware.read_bytes()).hexdigest(),
+        "mutations": [f"create self-verifying PX4 release media at {destination}"],
+    }
+
+
+def release_prepare(args: argparse.Namespace) -> CommandResult:
+    command = "iii px4 release prepare"
+    try:
+        retained = getattr(args, "_iii_retained_plan", None)
+        current = release_prepare_preflight(args)
+        if not isinstance(retained, Mapping) or retained.get("preflight") != current:
+            raise ValueError("PX4 release preparation inputs changed after planning")
+        from iii_deployment.px4_release import prepare_release_media
+
+        release_directory = Path(current["release_directory"])
+        root = release_directory
+        spec = json.loads((root / "firmware.json").read_text(encoding="utf-8"))
+        package = prepare_release_media(
+            destination=Path(current["destination"]),
+            firmware_path=release_directory / spec["build"]["artifact"],
+            build_record_path=release_directory / "px4-firmware-build.json",
+            resource_root=root,
+            schema_root=_resource_root(args, "schemas"),
+        )
+    except Exception as exc:
+        return _rejected(command, "III_PX4_RELEASE_PREPARE_REJECTED", exc)
+    return _accepted(
+        command,
+        "III_PX4_RELEASE_PREPARED",
+        "Prepared the paired PX4 firmware, parameter defaults, and microSD files without touching the flight controller.",
+        package,
+    )
+
+
+def release_audit(args: argparse.Namespace) -> CommandResult:
+    command = "iii px4 release audit"
+    try:
+        from .ssh_manager import SSHManager
+
+        operation_id = getattr(args, "_iii_operation_id", None)
+        if not isinstance(operation_id, str):
+            raise ValueError("PX4 audit requires an operation ID")
+        result = SSHManager().px4_audit(
+            release_id=args.release_id, operation_id=operation_id
+        )
+        audit = result.get("audit")
+        if not isinstance(audit, Mapping):
+            raise ValueError("receiver returned malformed PX4 audit evidence")
+    except Exception as exc:
+        return _rejected(command, "III_PX4_RELEASE_AUDIT_REJECTED", exc)
+    return _accepted(
+        command,
+        "III_PX4_RELEASE_MATCH" if audit.get("healthy") else "III_PX4_RELEASE_REQUIRED",
+        "PX4 matches the paired release." if audit.get("healthy") else "PX4 must be updated before III activation.",
+        result,
+        outcome=Outcome.SUCCESS if audit.get("healthy") else Outcome.REJECTED,
+        findings=tuple(
+            Finding(str(item.get("code", "PX4_MISMATCH")), str(item.get("detail", "PX4 release mismatch")))
+            for item in audit.get("findings", [])
+            if isinstance(item, Mapping)
+        ),
+    )
+
+
 def initialize(parser: argparse.ArgumentParser) -> None:
     commands = parser.add_subparsers(dest="px4_command")
+    release = commands.add_parser("release", help="prepare and audit the paired PX4 release")
+    release_leaves = release.add_subparsers(dest="px4_release_command")
+    release_prepare_parser = release_leaves.add_parser(
+        "prepare", help="create exact firmware and microSD update media"
+    )
+    release_prepare_parser.add_argument("--release-directory", required=True)
+    release_prepare_parser.add_argument("--destination", required=True)
+    release_prepare_parser.set_defaults(
+        func=release_prepare,
+        _iii_mutating=True,
+        _iii_plan_provider=release_prepare_preflight,
+    )
+    release_audit_parser = release_leaves.add_parser(
+        "audit", help="run the receiver-owned zero-write Ethernet audit"
+    )
+    release_audit_parser.add_argument("--release-id", required=True)
+    release_audit_parser.set_defaults(func=release_audit, _iii_mutating=False)
+
     params = commands.add_parser("params", help="manage complete PX4 parameter sets")
     leaves = params.add_subparsers(dest="px4_params_command")
 
@@ -546,7 +715,13 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "promote", help="write reviewed capture keys to a feature-branch manifest"
     )
     promote_parser.add_argument("--capture-id", required=True)
-    promote_parser.add_argument("--key", action="append", required=True)
+    promote_selection = promote_parser.add_mutually_exclusive_group(required=True)
+    promote_selection.add_argument("--key", action="append")
+    promote_selection.add_argument(
+        "--all-defaults",
+        action="store_true",
+        help="promote every non-calibration manifest value from the complete capture",
+    )
     promote_parser.set_defaults(
         func=promote, _iii_mutating=True, _iii_plan_provider=promote_preflight
     )

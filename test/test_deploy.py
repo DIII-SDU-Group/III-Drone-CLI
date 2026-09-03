@@ -850,3 +850,31 @@ def test_gc_failure_leaves_drone_entirely_untouched(monkeypatch, tmp_path):
     assert "drone-transfer" not in order
     assert "plan-stage" not in order
     assert "stage" not in order
+
+
+def test_receiver_px4_mismatch_uses_stable_release_required_error(monkeypatch):
+    class Manager:
+        def px4_audit(self, *, release_id, operation_id):
+            assert release_id == IDENTITY
+            assert operation_id == "px4-audit-operation"
+            return {
+                "audit": {
+                    "healthy": False,
+                    "findings": [
+                        {"code": "PX4_COMMIT_MISMATCH", "detail": "wrong commit"}
+                    ],
+                    "writes_performed": 0,
+                },
+                "activation_evidence": None,
+            }
+
+    monkeypatch.setattr(deploy, "_manager", lambda: Manager())
+    args = SimpleNamespace(_iii_operation_id="px4-audit-operation")
+    with pytest.raises(deploy.PX4ReleaseRequiredError) as observed:
+        deploy._px4_activation_evidence(
+            args,
+            selected={"parameter_profile": "real"},
+            release_id=IDENTITY,
+        )
+    assert observed.value.code == "III_PX4_RELEASE_REQUIRED"
+    assert "PX4_COMMIT_MISMATCH" in str(observed.value)
