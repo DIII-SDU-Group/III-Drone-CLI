@@ -1012,9 +1012,24 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "pull", help="seal one or more target snapshots locally"
     )
     pull_parser.add_argument("--target", choices=("real", "sim"), required=True)
-    pull_parser.add_argument("--snapshot", action="append", default=[])
-    pull_parser.add_argument("--name", action="append", default=[])
-    pull_parser.add_argument("--description", action="append", default=[])
+    pull_parser.add_argument(
+        "--snapshot",
+        action="append",
+        required=True,
+        help="saved target snapshot ID/path (repeat with --name and --description)",
+    )
+    pull_parser.add_argument(
+        "--name",
+        action="append",
+        required=True,
+        help="short display name paired with each --snapshot",
+    )
+    pull_parser.add_argument(
+        "--description",
+        action="append",
+        required=True,
+        help="purpose paired with each --snapshot",
+    )
     _common_root(pull_parser)
     pull_parser.set_defaults(
         func=pull, _iii_mutating=True, _iii_plan_provider=pull_preflight

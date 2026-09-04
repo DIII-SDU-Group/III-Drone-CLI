@@ -151,6 +151,26 @@ def test_capture_leaves_declare_mutation_and_plan_contracts():
         assert spec.interactive is False
 
 
+def test_pull_requires_explicit_snapshot_metadata_before_operation_preflight():
+    status, result = _invoke(
+        [
+            "config",
+            "capture",
+            "pull",
+            "--target",
+            "real",
+            "--name",
+            "aircraft-tune",
+            "--description",
+            "field tuning",
+        ],
+        {},
+    )
+    assert status == 64
+    assert result["code"] == "III_USAGE_ERROR"
+    assert "--snapshot" in result["findings"][0]["message"]
+
+
 def test_multi_capture_repeat_metadata_offline_verify_and_no_target_mutation(
     tmp_path, monkeypatch
 ):

@@ -88,6 +88,31 @@ def test_empty_and_mixed_inventory_tracks_identity_target_references_and_duplica
     assert capture["files"][0]["content_id"] == capture["files"][1]["content_id"]
 
 
+@pytest.mark.parametrize("partial_name", ["a" * 32, "import-" + "b" * 64])
+def test_inventory_preserves_interrupted_configuration_captures_as_records(
+    tmp_path, partial_name
+):
+    root = tmp_path / "registry"
+    partial = root / f"captures/.partial/{partial_name}.json"
+    _json(
+        partial,
+        {
+            "schema": "iii.configuration-capture-partial/v1",
+            "partial_id": partial_name,
+            "status": "interrupted",
+        },
+    )
+
+    inventory = registry.build_inventory(root)
+
+    assert partial.exists()
+    assert [item["locator"] for item in inventory["records"]] == [
+        f"captures/.partial/{partial_name}.json"
+    ]
+    assert inventory["records"][0]["integrity"]["state"] == "verified"
+    assert inventory["omitted"] == []
+
+
 def test_concurrent_reindex_is_locked_atomic_and_cleans_crash_staging(tmp_path):
     root = tmp_path / "registry"
     _mixed_registry(root)

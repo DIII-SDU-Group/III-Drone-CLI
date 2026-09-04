@@ -549,6 +549,26 @@ def _domain_units(root: Path, relative: PurePosixPath) -> tuple[list[Path], list
     for child in sorted(path.iterdir(), key=lambda item: item.name):
         locator = child.relative_to(root).as_posix()
         if child.name.startswith("."):
+            if (
+                relative == PurePosixPath("captures")
+                and child.name == ".partial"
+                and not child.is_symlink()
+                and child.is_dir()
+            ):
+                for partial in sorted(child.iterdir(), key=lambda item: item.name):
+                    if (
+                        partial.is_symlink()
+                        or not partial.is_file()
+                        or not re.fullmatch(
+                            r"(?:[a-f0-9]{32}|import-[a-f0-9]{64})\.json",
+                            partial.name,
+                        )
+                    ):
+                        raise RegistryError(
+                            "configuration capture staging content is unsafe"
+                        )
+                    units.append(partial)
+                continue
             if child.is_symlink() or not child.is_file():
                 raise RegistryError("hidden registry staging content is unsafe")
             if (
