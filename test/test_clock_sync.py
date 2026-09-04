@@ -13,19 +13,23 @@ class FakeManager:
         self.requests = []
         self.samples = 0
 
-    def verify_logical_target(self, *, profile, operation_id):
+    def clock_status_samples(self, *, profile, operation_ids):
         assert profile == "real"
-        assert operation_id.endswith(str(self.samples))
-        self.samples += 1
-        return {
-            "target": {"logical_id": "drone", "profile": "real"},
-            "clock": {
-                "boot_id": "boot-a",
-                "gate": "DEGRADED_CLOCK",
-                "target_monotonic_ns": 10_000_000_000 + self.samples,
-                "target_wall_ns": 2_000_000_000 + self.samples,
-            },
-        }
+        result = []
+        for operation_id in operation_ids:
+            assert operation_id.endswith(str(self.samples))
+            self.samples += 1
+            result.append(({
+                "target": {"logical_id": "drone", "profile": "real"},
+                "clock": {
+                    "boot_id": "boot-a",
+                    "gate": "DEGRADED_CLOCK",
+                    "target_monotonic_ns": 10_000_000_000 + self.samples,
+                    "target_wall_ns": 2_000_000_000 + self.samples,
+                },
+            }, 100_000_000 * self.samples, 101_000_000 * self.samples,
+                2_000_000_000 + self.samples))
+        return result
 
     def receiver_request(self, request):
         self.requests.append(request)
@@ -38,7 +42,7 @@ class FakeManager:
         return {"detached": True, "operation": {"state": "accepted"}}
 
 
-def test_clock_sync_collects_five_samples_and_uses_plan_apply(monkeypatch):
+def test_clock_sync_selects_five_samples_from_seven_and_uses_plan_apply(monkeypatch):
     manager = FakeManager()
     monkeypatch.setattr(ssh_manager, "SSHManager", lambda: manager)
     result = system.clock_sync(
@@ -49,7 +53,7 @@ def test_clock_sync_collects_five_samples_and_uses_plan_apply(monkeypatch):
         )
     )
     assert result.outcome.value == "success"
-    assert manager.samples == 5
+    assert manager.samples == 7
     assert [item["action"] for item in manager.requests] == [
         "plan-clock-sync",
         "clock-sync",

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import stat
 import struct
 import subprocess
@@ -127,6 +128,7 @@ class SSHManager:
         public_key_file: Path | None = None,
         environment: Mapping[str, str] | None = None,
         runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        popen: Callable[..., subprocess.Popen] = subprocess.Popen,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         environment = os.environ if environment is None else environment
@@ -159,6 +161,7 @@ class SSHManager:
         self.public_key = self._read_public_key()
         self.client_id = hashlib.sha256(self.public_key.encode("ascii")).hexdigest()
         self.runner = runner
+        self.popen = popen
         self.monotonic = monotonic
         self.endpoint = f"{USER}@{HOST}"
 
@@ -229,7 +232,7 @@ class SSHManager:
         return key
 
     def _options(self) -> list[str]:
-        return [
+        options = [
             "-o",
             "BatchMode=yes",
             "-o",
@@ -257,6 +260,19 @@ class SSHManager:
             "-i",
             str(self.identity_file),
         ]
+        control_path = os.environ.get("III_SSH_CONTROL_PATH")
+        if control_path:
+            options.extend(
+                [
+                    "-o",
+                    "ControlMaster=auto",
+                    "-o",
+                    f"ControlPath={control_path}",
+                    "-o",
+                    "ControlPersist=no",
+                ]
+            )
+        return options
 
     def _run(
         self,
@@ -377,6 +393,106 @@ class SSHManager:
                 "III_SSH_RESPONSE_INVALID", "receiver result is malformed"
             )
         return result
+
+    @staticmethod
+    def _receiver_result(response: Mapping[str, Any]) -> dict[str, Any]:
+        if response.get("schema") != "iii.receiver-response/v1":
+            raise SSHAdapterError(
+                "III_SSH_RESPONSE_INVALID", "receiver response schema is unsupported"
+            )
+        if response.get("ok") is not True:
+            error = response.get("error") or {}
+            raise SSHAdapterError(
+                "III_RECEIVER_REJECTED",
+                str(error.get("message", "receiver rejected the request")),
+            )
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise SSHAdapterError(
+                "III_SSH_RESPONSE_INVALID", "receiver result is malformed"
+            )
+        return result
+
+    def clock_status_samples(
+        self, *, profile: str, operation_ids: tuple[str, ...]
+    ) -> list[tuple[dict[str, Any], int, int, int]]:
+        """Sample status over one SSH gateway without sharing receiver requests."""
+        if (
+            not PROFILE.fullmatch(profile)
+            or len(operation_ids) < 5
+            or any(not OPERATION_ID.fullmatch(item) for item in operation_ids)
+        ):
+            raise SSHAdapterError(
+                "III_SSH_TARGET_REJECTED", "clock sample arguments are invalid"
+            )
+        argv = ["ssh", *self._options(), self.endpoint, "iii-clock-samples"]
+        process = None
+        try:
+            process = self.popen(
+                argv,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if process.stdin is None or process.stdout is None:
+                raise SSHAdapterError(
+                    "III_SSH_UNREACHABLE", "SSH clock sampling pipes are unavailable"
+                )
+            samples: list[tuple[dict[str, Any], int, int, int]] = []
+            for operation_id in operation_ids:
+                request = {
+                    "protocol_version": "1",
+                    "action": "status",
+                    "operation_id": operation_id,
+                    "client_id": self.client_id,
+                    "payload": {},
+                    "nonce": None,
+                }
+                before = time.monotonic_ns()
+                before_wall = time.time_ns()
+                process.stdin.write(canonical_json(request) + b"\n")
+                process.stdin.flush()
+                ready, _, _ = select.select([process.stdout], [], [], 12.0)
+                if not ready:
+                    raise SSHAdapterError(
+                        "III_SSH_UNREACHABLE", "iii.local timed out during clock sampling"
+                    )
+                raw = process.stdout.readline(1024 * 1024 + 2)
+                after = time.monotonic_ns()
+                try:
+                    response = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise SSHAdapterError(
+                        "III_SSH_RESPONSE_INVALID",
+                        "the clock sampling gateway returned invalid JSON",
+                    ) from exc
+                if not isinstance(response, dict) or raw != canonical_json(response) + b"\n":
+                    raise SSHAdapterError(
+                        "III_SSH_RESPONSE_INVALID",
+                        "the clock sampling gateway returned a non-canonical response",
+                    )
+                samples.append(
+                    (self._receiver_result(response), before, after, before_wall)
+                )
+            process.stdin.close()
+            if process.wait(timeout=12.0) != 0:
+                detail = process.stderr.read() if process.stderr is not None else b""
+                suffix = f": {detail.decode(errors='replace')[-1000:]}" if detail else ""
+                raise SSHAdapterError(
+                    "III_SSH_REMOTE_REJECTED",
+                    "the persistent clock sampling gateway rejected the operation" + suffix,
+                )
+            return samples
+        except SSHAdapterError:
+            raise
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SSHAdapterError(
+                "III_SSH_UNREACHABLE", "iii.local did not complete clock sampling"
+            ) from exc
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
 
     def verify_logical_target(
         self, *, profile: str, operation_id: str
@@ -548,6 +664,20 @@ class SSHManager:
             )
         return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+    @classmethod
+    def _sftp_upload_command(
+        cls, local: Path, remote: str, *, remote_size: int
+    ) -> str:
+        # OpenSSH reput requires the remote file to exist. A new partial starts
+        # with put; resume semantics apply only to a retained non-empty file.
+        verb = "put" if remote_size == 0 else "reput"
+        return (
+            f"{verb} -f "
+            + cls._sftp_quote(str(local))
+            + " "
+            + cls._sftp_quote(remote)
+        )
+
     def _sftp(self, commands: list[str]) -> None:
         batch = ("\n".join(commands) + "\n").encode("utf-8")
         argv = ["sftp", "-q", "-b", "-", *self._options(), self.endpoint]
@@ -672,10 +802,11 @@ class SSHManager:
                     continue
                 remote_path = f"{release_id}.partial/{relative}"
                 commands.append(
-                    "reput -f "
-                    + self._sftp_quote(str(local))
-                    + " "
-                    + self._sftp_quote(remote_path)
+                    self._sftp_upload_command(
+                        local,
+                        remote_path,
+                        remote_size=observed[relative]["size"],
+                    )
                 )
             if commands:
                 self._sftp(commands)
@@ -879,10 +1010,11 @@ class SSHManager:
                 if observed[relative]["size"] == indexed[relative]["size"]:
                     continue
                 commands.append(
-                    "reput -f "
-                    + self._sftp_quote(str(local))
-                    + " "
-                    + self._sftp_quote(f"receiver-{receiver_id}.partial/{relative}")
+                    self._sftp_upload_command(
+                        local,
+                        f"receiver-{receiver_id}.partial/{relative}",
+                        remote_size=observed[relative]["size"],
+                    )
                 )
             if commands:
                 self._sftp(commands)
@@ -965,10 +1097,11 @@ class SSHManager:
         if remote.get("state") == "partial" and initial_size < identity["size"]:
             self._sftp(
                 [
-                    "reput -f "
-                    + self._sftp_quote(str(archive))
-                    + " "
-                    + self._sftp_quote(f"backup-{backup_id}.partial/portable-state.tar")
+                    self._sftp_upload_command(
+                        archive,
+                        f"backup-{backup_id}.partial/portable-state.tar",
+                        remote_size=initial_size,
+                    )
                 ]
             )
             remote = self._backup_upload_control("finalize", backup_id)

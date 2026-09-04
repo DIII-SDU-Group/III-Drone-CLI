@@ -91,9 +91,11 @@ def _roots(args: argparse.Namespace) -> tuple[Path, Path, Path]:
 
 def _trusted_signers(args: argparse.Namespace) -> Path:
     env = _environment(args)
+    override = getattr(args, "trusted_signers", None)
     return (
         Path(
-            env.get(
+            override
+            or env.get(
                 "III_GC_TRUSTED_SIGNERS",
                 str(Path.home() / ".config/iii/keys/signing/trusted-signers.json"),
             )
@@ -430,6 +432,17 @@ def initialize(commands: Any) -> None:
         "application", help="manage signed GC/QGroundControl release slots"
     )
     actions = root.add_subparsers(dest="application_action")
+
+    def add_trust_option(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--trusted-signers",
+            type=Path,
+            help=(
+                "release signer trust store; overrides III_GC_TRUSTED_SIGNERS "
+                "for this authenticated operation"
+            ),
+        )
+
     stage = actions.add_parser(
         "stage", help="verify and stage a signed GC component bundle"
     )
@@ -439,6 +452,7 @@ def initialize(commands: Any) -> None:
         action="store_true",
         help="retain this cached bundle as an operator-designated offline set",
     )
+    add_trust_option(stage)
     stage.set_defaults(
         func=mutate,
         application_action="stage",
@@ -449,6 +463,7 @@ def initialize(commands: Any) -> None:
         "activate", help="activate an exact staged GC/QGC pair"
     )
     activate.add_argument("--release-id", required=True)
+    add_trust_option(activate)
     _safety_arguments(activate)
     activate.set_defaults(
         func=mutate,
@@ -459,6 +474,7 @@ def initialize(commands: Any) -> None:
     rollback = actions.add_parser(
         "rollback", help="return to the retained previous field pair"
     )
+    add_trust_option(rollback)
     _safety_arguments(rollback)
     rollback.set_defaults(
         func=mutate,

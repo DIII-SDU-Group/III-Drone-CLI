@@ -132,6 +132,32 @@ def test_absolute_runtime_path_is_fail_closed(monkeypatch):
     assert result.outcome is Outcome.REJECTED
 
 
+def test_ros_graph_names_are_not_misclassified_as_filesystem_paths(monkeypatch):
+    client = FakeClient(
+        {
+            "accepted": True,
+            "result": {
+                "status": {
+                    "specification": {"catalog_ready": True},
+                    "latest": {
+                        "intents": [
+                            {
+                                "service_name": "/mission/inspection_demo/trigger_recharge_now"
+                            }
+                        ]
+                    },
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(mission, "_client", lambda: client)
+
+    result = mission.status(Namespace())
+
+    assert result.code == "III_MISSION_CATALOG_STATUS"
+    assert result.outcome is Outcome.SUCCESS
+
+
 def test_parser_routes_read_only_and_retains_selection_before_mutation(monkeypatch, tmp_path):
     client = FakeClient({"accepted": True, "result": {"catalog": _catalog()}})
     monkeypatch.setattr(mission, "_client", lambda: client)

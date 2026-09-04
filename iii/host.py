@@ -653,6 +653,7 @@ def provision_apply(args: argparse.Namespace) -> CommandResult:
             )
     except Exception as exc:
         return _provision_rejected("iii host provision apply", exc)
+    field_target = retained["preflight"]["profile"]
     return CommandResult(
         command="iii host provision apply",
         outcome=Outcome.SUCCESS,
@@ -665,9 +666,9 @@ def provision_apply(args: argparse.Namespace) -> CommandResult:
         payload=report,
         next_actions=(
             NextAction(
-                ("iii", "field", "check", "--target", args.target),
+                ("iii", "field", "check", "--target", field_target),
                 "Inspect provisioned-but-not-commissioned host readiness.",
-                target=args.target,
+                target=field_target,
                 profile=retained["preflight"]["profile"],
             ),
         ),

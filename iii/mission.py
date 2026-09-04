@@ -57,18 +57,45 @@ def _rejected(command: str, code: str, message: str) -> CommandResult:
     )
 
 
-def _absolute_path_violation(value: Any, *, location: str = "result") -> str | None:
+_ROS_GRAPH_NAME_FIELDS = {
+    "service_name",
+    "topic",
+    "topic_name",
+    "node_name",
+    "node_namespace",
+    "namespace",
+}
+
+
+def _absolute_path_violation(
+    value: Any,
+    *,
+    location: str = "result",
+    field_name: str | None = None,
+) -> str | None:
     if isinstance(value, dict):
         for key, child in value.items():
-            violation = _absolute_path_violation(child, location=f"{location}.{key}")
+            violation = _absolute_path_violation(
+                child,
+                location=f"{location}.{key}",
+                field_name=str(key),
+            )
             if violation:
                 return violation
     elif isinstance(value, list):
         for index, child in enumerate(value):
-            violation = _absolute_path_violation(child, location=f"{location}[{index}]")
+            violation = _absolute_path_violation(
+                child,
+                location=f"{location}[{index}]",
+                field_name=field_name,
+            )
             if violation:
                 return violation
-    elif isinstance(value, str) and (value.startswith(("/", "file://")) or ":\\" in value):
+    elif (
+        isinstance(value, str)
+        and field_name not in _ROS_GRAPH_NAME_FIELDS
+        and (value.startswith(("/", "file://")) or ":\\" in value)
+    ):
         return f"runtime response exposed a forbidden filesystem path at {location}"
     return None
 

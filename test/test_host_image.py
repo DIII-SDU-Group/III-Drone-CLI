@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import StringIO
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from iii.__main__ import main
 
@@ -284,3 +285,36 @@ def test_host_provision_check_is_declared_read_only(
     assert value["code"] == "III_HOST_PROVISION_CHECKED"
     assert value["payload"]["mutation_performed"] is False
     assert value["payload"]["ansible"]["totals"]["changed"] == 7
+
+
+def test_host_provision_success_routes_field_check_to_profile_not_inventory_host(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import iii.host as host
+    import iii_deployment.host_provision as provision
+
+    monkeypatch.setattr(
+        provision,
+        "apply_plan",
+        lambda *_args, **_kwargs: {
+            "schema": "iii.host-provisioning-run/v1",
+            "report_id": "a" * 64,
+        },
+    )
+    monkeypatch.setattr(host, "_provision_paths", lambda _args: {"schema": tmp_path})
+    args = SimpleNamespace(
+        target="10.42.0.15",
+        _iii_operation_id=None,
+        _iii_retained_plan={"preflight": {"profile": "real"}},
+    )
+
+    result = host.provision_apply(args)
+
+    assert result.next_actions[0].command == (
+        "iii",
+        "field",
+        "check",
+        "--target",
+        "real",
+    )
+    assert result.next_actions[0].target == "real"

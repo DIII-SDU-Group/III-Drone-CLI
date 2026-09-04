@@ -96,13 +96,65 @@ def test_pull_uses_canonical_result_contract(monkeypatch):
     monkeypatch.setattr(px4, "_store", lambda _args: FakeStore())
     output = StringIO()
     code = main(
-        ["px4", "params", "pull", "--profile", "real", "--json"],
+        [
+            "px4",
+            "params",
+            "pull",
+            "--profile",
+            "sim",
+            "--json",
+        ],
         stdout=output,
         stderr=StringIO(),
     )
     assert code == 0
     assert '"code":"III_PX4_PULL"' in output.getvalue()
     assert '"writes_performed":0' in output.getvalue()
+
+
+def test_real_pull_uses_receiver_owned_ethernet_snapshot(monkeypatch):
+    subject = FakeStore()
+    snapshot = {
+        "schema": "iii.px4-parameter-snapshot/v1",
+        "snapshot_id": "b" * 64,
+        "profile": "real",
+    }
+    subject.retain_snapshot = lambda value: snapshot
+    monkeypatch.setattr(px4, "_store", lambda _args: subject)
+
+    class Manager:
+        def px4_audit(self, *, release_id, operation_id):
+            assert release_id == "a" * 64 and operation_id
+            return {"activation_evidence": {"snapshot": snapshot}}
+
+    monkeypatch.setattr("iii.ssh_manager.SSHManager", Manager)
+    result = px4.pull(SimpleNamespace(profile="real", release_id="a" * 64))
+    assert result.code == "III_PX4_PULL"
+
+
+def test_release_audit_generates_receiver_correlation_id_without_mutation_controls(
+    monkeypatch,
+):
+    observed = []
+
+    class Manager:
+        def px4_audit(self, *, release_id, operation_id):
+            observed.append((release_id, operation_id))
+            return {"audit": {"healthy": True, "findings": []}}
+
+    monkeypatch.setattr("iii.ssh_manager.SSHManager", Manager)
+    output = StringIO()
+    code = main(
+        ["px4", "release", "audit", "--release-id", "a" * 64, "--json"],
+        stdout=output,
+        stderr=StringIO(),
+    )
+
+    assert code == 0
+    assert observed[0][0] == "a" * 64
+    assert observed[0][1].startswith("iii-")
+    assert len(observed[0][1]) == 28
+    assert '"code":"III_PX4_RELEASE_MATCH"' in output.getvalue()
 
 
 def test_apply_reauthenticates_exact_retained_plan_and_disarmed_target(monkeypatch):

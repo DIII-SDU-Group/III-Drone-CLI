@@ -66,3 +66,12 @@ def test_configuration_capture_transport_is_cli_authenticated_and_profile_bound(
         for request, _kwargs in requests
     )
     assert all(kwargs["timeout"] == 9 for _request, kwargs in requests)
+
+
+def test_runtime_api_client_default_timeout_allows_lifecycle_operations(monkeypatch):
+    monkeypatch.delenv("III_RUNTIME_API_CLI_TIMEOUT_SEC", raising=False)
+    monkeypatch.setenv("III_RUNTIME_API_URL", "http://runtime.example")
+
+    client = RuntimeApiClient.from_env()
+
+    assert client.timeout_seconds == 60.0

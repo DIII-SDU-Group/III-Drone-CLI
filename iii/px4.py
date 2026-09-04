@@ -126,7 +126,28 @@ def pull(args: argparse.Namespace) -> CommandResult:
     command = "iii px4 params pull"
     try:
         store = _store(args)
-        snapshot = store.pull(args.profile)
+        if args.profile == "real":
+            if not getattr(args, "release_id", None):
+                raise ValueError(
+                    "real PX4 capture requires the exact staged --release-id; "
+                    "the ground-control host must use receiver-owned Ethernet"
+                )
+            from .operation import operation_id as new_operation_id
+            from .ssh_manager import SSHManager
+
+            result = SSHManager().px4_audit(
+                release_id=args.release_id,
+                operation_id=getattr(args, "_iii_operation_id", None)
+                or new_operation_id(),
+            )
+            evidence = result.get("activation_evidence")
+            if not isinstance(evidence, Mapping) or not isinstance(
+                evidence.get("snapshot"), Mapping
+            ):
+                raise ValueError("receiver did not return a complete PX4 inventory")
+            snapshot = store.retain_snapshot(evidence["snapshot"])
+        else:
+            snapshot = store.pull(args.profile)
         comparison = store.compare(args.profile, snapshot["snapshot_id"])
     except Exception as exc:
         return _rejected(command, "III_PX4_PULL_REJECTED", exc)
@@ -597,7 +618,7 @@ def release_prepare(args: argparse.Namespace) -> CommandResult:
     return _accepted(
         command,
         "III_PX4_RELEASE_PREPARED",
-        "Prepared the paired PX4 firmware, parameter defaults, and microSD files without touching the flight controller.",
+        "Prepared the paired PX4 USB-update payload and microSD recovery files without touching the flight controller.",
         package,
     )
 
@@ -605,11 +626,14 @@ def release_prepare(args: argparse.Namespace) -> CommandResult:
 def release_audit(args: argparse.Namespace) -> CommandResult:
     command = "iii px4 release audit"
     try:
+        from .operation import operation_id as new_operation_id
         from .ssh_manager import SSHManager
 
-        operation_id = getattr(args, "_iii_operation_id", None)
-        if not isinstance(operation_id, str):
-            raise ValueError("PX4 audit requires an operation ID")
+        # The receiver protocol correlates every request with an operation ID,
+        # including read-only requests. The universal runner intentionally does
+        # not retain plans for read-only commands, so supply a correlation-only
+        # identifier here rather than asking operators for mutation controls.
+        operation_id = getattr(args, "_iii_operation_id", None) or new_operation_id()
         result = SSHManager().px4_audit(
             release_id=args.release_id, operation_id=operation_id
         )
@@ -637,7 +661,7 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     release = commands.add_parser("release", help="prepare and audit the paired PX4 release")
     release_leaves = release.add_subparsers(dest="px4_release_command")
     release_prepare_parser = release_leaves.add_parser(
-        "prepare", help="create exact firmware and microSD update media"
+        "prepare", help="create exact USB-update payload with microSD recovery files"
     )
     release_prepare_parser.add_argument("--release-directory", required=True)
     release_prepare_parser.add_argument("--destination", required=True)
@@ -659,6 +683,10 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "pull", help="capture a complete disarmed inventory"
     )
     pull_parser.add_argument("--profile", choices=("real", "sim"), required=True)
+    pull_parser.add_argument(
+        "--release-id",
+        help="exact staged release used for receiver-owned real PX4 Ethernet capture",
+    )
     pull_parser.set_defaults(func=pull, _iii_mutating=False)
 
     plan_parser = leaves.add_parser("plan", help="retain an exact per-key write plan")

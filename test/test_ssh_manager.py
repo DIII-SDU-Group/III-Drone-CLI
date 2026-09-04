@@ -218,7 +218,8 @@ def test_complete_bundle_upload_is_resumable_fixed_root_and_records_budget(
     Draft7Validator(schema).validate(result.as_dict())
     sftp = next(call for call in runner.calls if call[0][0] == "sftp")
     batch = sftp[1]["input"].decode("utf-8")
-    assert batch.count("reput -f ") == len(COMPONENT_FILES)
+    assert batch.count("put -f ") == len(COMPONENT_FILES)
+    assert "reput -f " not in batch
     assert f'"{RELEASE}.partial/drone/' in batch
     assert 'bundle path \\"quoted\\"' in batch
     assert all(call[0][0] in {"ssh", "sftp"} for call in runner.calls)
@@ -548,6 +549,8 @@ def test_receiver_update_transfer_uses_fixed_gateway_and_resumable_sftp(
         f'"receiver-{receiver_id}.partial/bundle/receiver-update.tar"'
         in sftp[1]["input"].decode()
     )
+    assert sftp[1]["input"].decode().count("put -f ") == 3
+    assert "reput -f " not in sftp[1]["input"].decode()
 
 
 def test_unexpected_logical_runtime_and_arbitrary_commands_fail_closed(

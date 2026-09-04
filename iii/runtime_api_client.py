@@ -21,7 +21,7 @@ class RuntimeApiClient:
         *,
         base_url: str,
         cli_token: str,
-        timeout_seconds: float = 5.0,
+        timeout_seconds: float = 60.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.cli_token = cli_token
@@ -39,7 +39,7 @@ class RuntimeApiClient:
             port = os.environ.get("III_RUNTIME_API_PORT", "8765")
             base_url = f"http://{host}:{port}"
         token = os.environ.get("III_RUNTIME_API_CLI_TOKEN", "dev-cli-token")
-        timeout = float(os.environ.get("III_RUNTIME_API_CLI_TIMEOUT_SEC", "5"))
+        timeout = float(os.environ.get("III_RUNTIME_API_CLI_TIMEOUT_SEC", "60"))
         return cls(base_url=base_url, cli_token=token, timeout_seconds=timeout)
 
     def command(

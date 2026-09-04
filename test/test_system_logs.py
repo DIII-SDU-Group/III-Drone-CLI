@@ -266,6 +266,27 @@ def test_boot_replaces_stale_tmux_session_when_daemon_was_rebooted(monkeypatch):
     assert events == [("kill", "iii_sim"), ("start", "iii_sim", False)]
 
 
+def test_boot_reports_daemon_policy_rejection_as_operator_failure(monkeypatch, capsys):
+    monkeypatch.setenv("CLI_CONFIGURATION", "dev")
+    system = importlib.import_module("iii.system")
+
+    class _Client:
+        def boot(self, profile):
+            assert profile == "opti_track"
+            raise RuntimeError(
+                "aircraft configuration is not receiver-reconciled; "
+                "runtime mutation is forbidden"
+            )
+
+    monkeypatch.setattr(system, "_ensure_local_daemon", lambda: _Client())
+
+    with pytest.raises(SystemExit) as exc_info:
+        system.boot(SimpleNamespace(attach=False, profile="opti_track"))
+
+    assert exc_info.value.code == 1
+    assert "not receiver-reconciled" in capsys.readouterr().out
+
+
 def test_daemon_restart_wraps_systemctl(monkeypatch):
     monkeypatch.setenv("CLI_CONFIGURATION", "dev")
     monkeypatch.setenv("III_SYSTEMD_DAEMON_SERVICE", "test-daemon.service")

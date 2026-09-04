@@ -109,3 +109,12 @@ def test_explicit_disconnected_and_sim_safety_are_distinct():
     }
     assert sim["profile"] == "sim"
     assert disconnected_evidence["sha256"] != sim_evidence["sha256"]
+
+
+def test_explicit_trust_store_overrides_host_default(tmp_path):
+    explicit = tmp_path / "field-trust.json"
+    explicit.write_text("{}")
+    args = _stage_args(tmp_path)
+    args.trusted_signers = explicit
+
+    assert gc_application._trusted_signers(args) == explicit.resolve()

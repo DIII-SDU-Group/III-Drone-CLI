@@ -592,7 +592,14 @@ def boot(args):
         print(f"Mission catalog {action}: {preflight['catalog_hash']}")
 
     client = _ensure_local_daemon()
-    response = client.boot(profile)
+    try:
+        response = client.boot(profile)
+    except RuntimeError as exc:
+        # Daemon-side policy and configuration rejections are operator-facing
+        # failures, not CLI implementation errors. Preserve the exact reason in
+        # both human and structured transcript output.
+        print(str(exc))
+        exit(1)
     tmux_handler = TmuxHandler()
     session_spec = response["tmux"]
     session_running = tmux_handler.session_running(session_spec["session_name"])
@@ -626,14 +633,13 @@ def clock_sync(args):
         manager = SSHManager()
         samples = []
         advertised = None
-        for index in range(5):
-            before_monotonic = time.monotonic_ns()
-            before_wall = time.time_ns()
-            status = manager.verify_logical_target(
-                profile=profile,
-                operation_id=f"{operation_id}-sample-{index}",
-            )
-            after_monotonic = time.monotonic_ns()
+        # Seven independent status requests share only their authenticated SSH
+        # gateway process.  That removes interpreter startup from the RTT while
+        # retaining five best samples and the receiver's settled-order proof.
+        operation_ids = tuple(f"{operation_id}-sample-{index}" for index in range(7))
+        for status, before_monotonic, after_monotonic, before_wall in manager.clock_status_samples(
+            profile=profile, operation_ids=operation_ids
+        ):
             rtt = after_monotonic - before_monotonic
             clock = status.get("clock")
             if not isinstance(clock, dict):
@@ -659,6 +665,13 @@ def clock_sync(args):
                     "offset_ns": target_wall - midpoint,
                 }
             )
+        settled = [sample for sample in samples if sample["rtt_ns"] <= 500_000_000]
+        if len(settled) < 5:
+            raise ValueError("clock synchronization needs five samples at or below 500 ms")
+        samples = sorted(
+            sorted(settled, key=lambda sample: sample["rtt_ns"])[:5],
+            key=lambda sample: sample["target_monotonic_ns"],
+        )
         planned = manager.receiver_request(
             {
                 "protocol_version": "1",

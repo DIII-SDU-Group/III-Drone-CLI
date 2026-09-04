@@ -50,16 +50,125 @@ def canonical(path: Path, value: dict) -> None:
     )
 
 
-def component(path: Path) -> None:
+def component(
+    path: Path,
+    *,
+    source_identity: str = "c" * 64,
+    included_experimental: list[str] | None = None,
+) -> None:
     path.mkdir(parents=True)
+    included = included_experimental or []
     release = {
         "release_id": IDENTITY,
         "release_class": "field-development",
-        "source_identity": "c" * 64,
+        "source_identity": source_identity,
+        "mission_catalog": {
+            "entries": ["inspection-production", *included],
+            "included_experimental": included,
+        },
     }
     canonical(path / "release-manifest.json", release)
-    canonical(path / "bundle.manifest.json", {"release_id": IDENTITY})
+    canonical(
+        path / "bundle.manifest.json",
+        {
+            "release_id": IDENTITY,
+            # Current bundle manifests enumerate archived entries. Older manifests
+            # used a mapping with an optional archive_sha256 field.
+            "content": [],
+        },
+    )
     (path / "bundle.tar.zst").write_bytes(b"archive")
+
+
+def test_field_bundle_release_binds_source_components_and_missions(tmp_path):
+    bundle = tmp_path / "bundle"
+    component(bundle / "drone", included_experimental=["field-experiment"])
+    component(bundle / "gc", included_experimental=["field-experiment"])
+
+    release = deploy._field_bundle_release(
+        bundle,
+        components=["drone", "gc"],
+        source_identity="c" * 64,
+        selected_missions=["field-experiment"],
+    )
+
+    assert release["release_id"] == IDENTITY
+
+
+@pytest.mark.parametrize(
+    ("source_identity", "selected_missions", "match"),
+    [
+        ("d" * 64, ["field-experiment"], "source identity differs"),
+        ("c" * 64, [], "mission selection differs"),
+    ],
+)
+def test_field_bundle_release_rejects_stale_source_or_mission_selection(
+    tmp_path, source_identity, selected_missions, match
+):
+    bundle = tmp_path / "bundle"
+    component(bundle / "drone", included_experimental=["field-experiment"])
+
+    with pytest.raises(ValueError, match=match):
+        deploy._field_bundle_release(
+            bundle,
+            components=["drone"],
+            source_identity=source_identity,
+            selected_missions=selected_missions,
+        )
+
+
+def test_field_bundle_release_rejects_legacy_manifest_without_selection(tmp_path):
+    bundle = tmp_path / "bundle"
+    component(bundle / "drone")
+    release_path = bundle / "drone/release-manifest.json"
+    release = json.loads(release_path.read_text())
+    del release["mission_catalog"]["entries"]
+    del release["mission_catalog"]["included_experimental"]
+    canonical(release_path, release)
+
+    with pytest.raises(ValueError, match="rebuild it with current tooling"):
+        deploy._field_bundle_release(
+            bundle,
+            components=["drone"],
+            source_identity="c" * 64,
+            selected_missions=[],
+        )
+
+
+def test_inspect_uses_explicit_bundle_trust_store(monkeypatch, tmp_path):
+    from iii_deployment import bundle as bundle_module
+    from iii_deployment import signers as signers_module
+
+    trust = tmp_path / "trusted-signers.json"
+    trust.write_text("{}\n", encoding="utf-8")
+    observed = {}
+
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+    monkeypatch.setattr(
+        signers_module,
+        "load_trusted_signers",
+        lambda path, _registry: observed.setdefault("trust_path", path) or {},
+    )
+    monkeypatch.setattr(
+        bundle_module,
+        "inspect_bundle",
+        lambda component_path, trusted, **_kwargs: SimpleNamespace(
+            release_manifest={"release_id": IDENTITY},
+            bundle_manifest={"release_id": IDENTITY},
+        ),
+    )
+
+    result = deploy.inspect(
+        SimpleNamespace(
+            component=tmp_path / "component",
+            target="real",
+            trusted_signers=trust,
+            _iii_environment={},
+        )
+    )
+
+    assert result.code == "III_DEPLOY_BUNDLE_INSPECTED"
+    assert observed["trust_path"] == trust.resolve()
 
 
 class Transfer:
@@ -346,11 +455,61 @@ def _impact(*components):
     }
 
 
-def _field_args(tmp_path, bundle, *, activate=False):
+def test_source_impact_rejects_local_test_mission_include(monkeypatch, tmp_path):
+    from iii_deployment import field_impact as field_impact_module
+    from iii_deployment import source as source_module
+
+    monkeypatch.setattr(
+        source_module,
+        "load_source_policy",
+        lambda *_args: {},
+    )
+    monkeypatch.setattr(
+        source_module,
+        "capture_source_snapshot",
+        lambda *_args: {
+            "content_identity": "c" * 64,
+            "changed_paths": [],
+            "impact": {"components": ["drone"], "causes": {"drone": ["source"]}},
+        },
+    )
+    monkeypatch.setattr(source_module, "validate_component_selection", lambda *_args: None)
+    monkeypatch.setattr(
+        field_impact_module,
+        "detailed_field_impact",
+        lambda *_args: {
+            "detail_id": "3" * 64,
+            "missions": {"entries": [], "behavior_trees": [], "catalog_identity": "4" * 64},
+            "parameters": {
+                "manifest": {},
+                "parameter_sets": [],
+                "configuration_identity": "5" * 64,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        field_impact_module,
+        "mission_registry",
+        lambda *_args: {
+            "opti-track-up-down-test": {"classification": "test"},
+            "field-experiment": {"classification": "experimental"},
+        },
+    )
+
+    with pytest.raises(ValueError, match="only registered experimental"):
+        deploy._source_impact(
+            Path(__file__).resolve().parents[3],
+            ["opti-track-up-down-test"],
+            [],
+            ["drone"],
+        )
+
+
+def _field_args(tmp_path, bundle, *, activate=False, checkpoint=CHECKPOINT):
     return SimpleNamespace(
         target="real",
         bundle_set=bundle,
-        configuration_checkpoint_id=CHECKPOINT,
+        configuration_checkpoint_id=checkpoint,
         status_index=None,
         trusted_signers=tmp_path / "trust.json",
         component=[],
@@ -403,6 +562,51 @@ def test_gc_only_field_flow_never_contacts_drone(monkeypatch, tmp_path):
         "drone-stage",
     ]
     assert result.payload["actual"]["phases"][1]["state"] == "skipped"
+
+
+def test_field_staging_does_not_require_an_activation_checkpoint(monkeypatch, tmp_path):
+    bundle = tmp_path / "bundle"
+    component(bundle / "gc")
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+    monkeypatch.setattr(
+        deploy,
+        "_source_impact",
+        lambda *_args: ({"content_identity": "c" * 64}, _impact("gc")),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_install_gc_application",
+        lambda *_args, **_kwargs: {"state": "prepared", "release_id": IDENTITY},
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_gc_application_store",
+        lambda _args: SimpleNamespace(
+            state=lambda: {"active_release_id": "9" * 64},
+            release_manifest=lambda _release_id: {"release_id": IDENTITY},
+        ),
+    )
+
+    result = deploy.field(_field_args(tmp_path, bundle, checkpoint=None))
+
+    assert result.outcome.value == "success"
+    plan = json.loads(
+        (
+            tmp_path
+            / "operations/iii-fake-field-operation/deployment-impact.json"
+        ).read_text()
+    )
+    assert plan["configuration_checkpoint_id"] is None
+
+
+def test_field_activation_requires_a_configuration_checkpoint(monkeypatch, tmp_path):
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+
+    result = deploy.field(_field_args(tmp_path, tmp_path / "absent", activate=True, checkpoint=None))
+
+    assert result.outcome.value == "rejected"
+    assert result.code == "III_DEPLOY_CONTRACT_REJECTED"
+    assert "configuration-checkpoint-id" in result.findings[0].message
 
 
 def test_drone_only_field_flow_never_reads_gc_bundle(monkeypatch, tmp_path):

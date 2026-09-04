@@ -168,6 +168,59 @@ def _component(component: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return release, bundle
 
 
+def _field_bundle_release(
+    bundle_root: Path,
+    *,
+    components: Sequence[str],
+    source_identity: str,
+    selected_missions: Sequence[str],
+) -> dict[str, Any]:
+    """Bind a field bundle set to the exact retained source and mission choice."""
+
+    manifests = {
+        name: _component(bundle_root / name)[0] for name in sorted(set(components))
+    }
+    if not manifests:
+        raise ValueError("field bundle validation requires at least one component")
+    selected_release = manifests["drone" if "drone" in manifests else "gc"]
+    if selected_release.get("release_class") != "field-development":
+        raise ValueError("iii deploy field accepts only a field-development release")
+    if any(value != selected_release for value in manifests.values()):
+        raise ValueError("selected field component release manifests disagree")
+    bundle_source_identity = selected_release.get("source_identity")
+    if bundle_source_identity is None and isinstance(selected_release.get("source"), dict):
+        bundle_source_identity = selected_release["source"].get("content_identity")
+    if bundle_source_identity != source_identity:
+        raise ValueError(
+            "field bundle source identity differs from the retained source snapshot"
+        )
+    catalog = selected_release.get("mission_catalog")
+    if not isinstance(catalog, Mapping):
+        raise ValueError("field bundle lacks release-bound mission catalog metadata")
+    included = catalog.get("included_experimental")
+    entries = catalog.get("entries")
+    if not isinstance(included, list) or not isinstance(entries, list):
+        raise ValueError(
+            "field bundle lacks exact mission selection metadata; rebuild it with current tooling"
+        )
+    if any(not isinstance(item, str) for item in included + entries):
+        raise ValueError("field bundle mission selection metadata is malformed")
+    requested = sorted(set(selected_missions))
+    declared = sorted(set(included))
+    if requested != declared:
+        raise ValueError(
+            "field bundle experimental mission selection differs from the deployment plan: "
+            f"bundle={declared}, requested={requested}"
+        )
+    missing = sorted(set(requested) - set(entries))
+    if missing:
+        raise ValueError(
+            "field bundle mission catalog omits selected mission entries: "
+            + ", ".join(missing)
+        )
+    return selected_release
+
+
 def _impact_display(
     impact: Mapping[str, Any], actual: Mapping[str, Any] | None = None
 ) -> str:
@@ -281,11 +334,17 @@ def plan(args: argparse.Namespace) -> CommandResult:
     try:
         selected = _target(args)
         _require_remote(selected)
-        _snapshot, impact = _source_impact(
+        snapshot, impact = _source_impact(
             _workspace(), args.include_mission, args.exclude_mission, args.component
         )
         if args.bundle_set:
-            release_id = _component(args.bundle_set / "drone")[0]["release_id"]
+            release = _field_bundle_release(
+                args.bundle_set.resolve(),
+                components=impact["components"],
+                source_identity=snapshot["content_identity"],
+                selected_missions=impact["missions"]["selected"],
+            )
+            release_id = release["release_id"]
     except Exception as exc:
         return _reject("iii deploy plan", exc, target=selected, release_id=release_id)
     report = {"display": _impact_display(impact), "impact": impact, "actual": None}
@@ -315,13 +374,23 @@ def plan(args: argparse.Namespace) -> CommandResult:
 def inspect(args: argparse.Namespace) -> CommandResult:
     from iii_deployment.bundle import inspect_bundle, load_bundle_limits
     from iii_deployment.contracts import ContractRegistry
+    from iii_deployment.signers import load_trusted_signers
 
     selected = None
     try:
         selected = _target(args)
         root = _workspace()
+        trust_path = getattr(args, "trusted_signers", None) or _environment(args).get(
+            "III_RELEASE_TRUSTED_SIGNERS",
+            "/etc/iii-deployment/trusted-signers.json",
+        )
+        trusted_signers = load_trusted_signers(
+            Path(trust_path).expanduser().resolve(),
+            ContractRegistry(root / "deployment/schemas/v1"),
+        )
         verified = inspect_bundle(
             args.component,
+            trusted_signers,
             registry=ContractRegistry(root / "deployment/schemas/v1"),
             host_limits=load_bundle_limits(root / "deployment/operational-policy.json"),
         )
@@ -512,7 +581,10 @@ def _stage_component(
         if status_index is None
         else _read_json(status_index, label="release-status index")["index_id"]
     )
-    archive_sha = bundle.get("content", {}).get("archive_sha256")
+    content = bundle.get("content")
+    archive_sha = (
+        content.get("archive_sha256") if isinstance(content, Mapping) else None
+    )
     if not isinstance(archive_sha, str):
         archive_sha = hashlib.sha256(
             (component / "bundle.tar.zst").read_bytes()
@@ -1055,7 +1127,7 @@ def _source_impact(
         load_source_policy,
         validate_component_selection,
     )
-    from iii_deployment.field_impact import detailed_field_impact
+    from iii_deployment.field_impact import detailed_field_impact, mission_registry
 
     registry = ContractRegistry(root / "deployment/schemas/v1")
     policy = load_source_policy(root / "deployment/source-policy.json", registry)
@@ -1094,6 +1166,17 @@ def _source_impact(
         ),
     }
     detail = detailed_field_impact(root, changed)
+    registry_entries = mission_registry(root)
+    invalid_includes = sorted(
+        mission_id
+        for mission_id in set(include)
+        if registry_entries.get(mission_id, {}).get("classification") != "experimental"
+    )
+    if invalid_includes:
+        raise ValueError(
+            "only registered experimental mission entries may be explicitly included: "
+            + ", ".join(invalid_includes)
+        )
     inferred = sorted(
         item["id"]
         for item in detail["missions"]["entries"]
@@ -1235,6 +1318,10 @@ def field(args: argparse.Namespace) -> CommandResult:
     try:
         selected = _target(args)
         _require_remote(selected)
+        if args.activate and not args.configuration_checkpoint_id:
+            raise ValueError(
+                "--configuration-checkpoint-id is required when --activate is requested"
+            )
         identifier, store = _operation(args)
         root = _workspace()
         snapshot, impact = _source_impact(
@@ -1242,27 +1329,13 @@ def field(args: argparse.Namespace) -> CommandResult:
         )
         bundle_root = args.bundle_set.resolve()
         selected_components = set(impact["components"])
-        component_manifests = {
-            name: _component(bundle_root / name)[0]
-            for name in sorted(selected_components)
-        }
-        selected_release = component_manifests[
-            "drone" if "drone" in component_manifests else "gc"
-        ]
+        selected_release = _field_bundle_release(
+            bundle_root,
+            components=impact["components"],
+            source_identity=snapshot["content_identity"],
+            selected_missions=impact["missions"]["selected"],
+        )
         release_id = selected_release["release_id"]
-        if selected_release.get("release_class") != "field-development":
-            raise ValueError(
-                "iii deploy field accepts only a field-development release"
-            )
-        if any(value != selected_release for value in component_manifests.values()):
-            raise ValueError("selected field component release manifests disagree")
-        source_id = selected_release.get("source_identity")
-        if source_id is None and isinstance(selected_release.get("source"), dict):
-            source_id = selected_release["source"].get("content_identity")
-        if source_id is not None and source_id != snapshot["content_identity"]:
-            raise ValueError(
-                "field bundle source identity differs from the retained source snapshot"
-            )
         plan = {
             "schema": "iii.field-deployment-plan/v1",
             "operation_id": identifier,
@@ -1846,6 +1919,11 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "inspect", help="inspect a local component bundle"
     )
     inspect_parser.add_argument("component", type=Path)
+    inspect_parser.add_argument(
+        "--trusted-signers",
+        type=Path,
+        help="bundle signer trust store (defaults to III_RELEASE_TRUSTED_SIGNERS)",
+    )
     _target_option(inspect_parser)
     inspect_parser.set_defaults(func=inspect, _iii_mutating=False)
 
@@ -1927,8 +2005,10 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     field_parser.add_argument("--bundle-set", required=True, type=Path)
     field_parser.add_argument(
         "--configuration-checkpoint-id",
-        required=True,
-        help="currently selected source checkpoint reconciled by receiver activation",
+        help=(
+            "currently selected source checkpoint reconciled by receiver activation "
+            "(required with --activate; staging does not require one)"
+        ),
     )
     field_parser.add_argument("--status-index", type=Path)
     field_parser.add_argument(
