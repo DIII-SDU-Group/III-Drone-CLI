@@ -478,6 +478,7 @@ def test_cli_archive_plan_is_structured_and_requires_retained_confirmation(tmp_p
     assert apply_status == 0
     assert applied_value["code"] == "III_RECORD_ARCHIVE_VERIFIED"
     assert (tmp_path / "cli.tar").is_file()
+    assert registry.read_index(root) == registry.build_inventory(root)
 
 
 def test_cli_prune_replays_exact_plan_without_pruning_its_own_operation(tmp_path):

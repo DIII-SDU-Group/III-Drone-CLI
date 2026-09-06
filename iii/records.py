@@ -237,6 +237,14 @@ def archive(args: argparse.Namespace) -> CommandResult:
     )
 
 
+def finalize_record_operation(args: argparse.Namespace) -> None:
+    """Refresh the derived index after the runner records final operation state."""
+
+    root = _root(args)
+    with registry.registry_lock(root):
+        registry.write_index(root, registry.build_inventory(root))
+
+
 def import_preflight(args: argparse.Namespace) -> dict[str, Any]:
     retained = _retained_preflight(args)
     return retained or registry.build_import_plan(
@@ -343,7 +351,10 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "--base", type=Path, help="verified base archive for incremental output"
     )
     archive_parser.set_defaults(
-        func=archive, _iii_mutating=True, _iii_plan_provider=archive_preflight
+        func=archive,
+        _iii_mutating=True,
+        _iii_plan_provider=archive_preflight,
+        _iii_operation_finalizer=finalize_record_operation,
     )
 
     import_parser = commands.add_parser(
@@ -352,7 +363,10 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     _common(import_parser)
     import_parser.add_argument("archive", type=Path)
     import_parser.set_defaults(
-        func=import_archive, _iii_mutating=True, _iii_plan_provider=import_preflight
+        func=import_archive,
+        _iii_mutating=True,
+        _iii_plan_provider=import_preflight,
+        _iii_operation_finalizer=finalize_record_operation,
     )
 
     prune_parser = commands.add_parser(
@@ -363,5 +377,8 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "--record", action="append", required=True, metavar="SHA256"
     )
     prune_parser.set_defaults(
-        func=prune, _iii_mutating=True, _iii_plan_provider=prune_preflight
+        func=prune,
+        _iii_mutating=True,
+        _iii_plan_provider=prune_preflight,
+        _iii_operation_finalizer=finalize_record_operation,
     )

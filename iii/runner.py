@@ -88,6 +88,7 @@ class CommandSpec:
     mutating: bool
     interactive: bool = False
     plan_provider: Callable[[argparse.Namespace], Mapping[str, Any]] | None = None
+    operation_finalizer: Callable[[argparse.Namespace], None] | None = None
 
     @property
     def identity(self) -> str:
@@ -238,6 +239,7 @@ def inventory_parser(
                     current._defaults.get("_iii_interactive", _is_interactive(prefix))
                 ),
                 current._defaults.get("_iii_plan_provider"),
+                current._defaults.get("_iii_operation_finalizer"),
             )
             current.set_defaults(_iii_command_spec=spec)
             inventory[prefix] = spec
@@ -903,6 +905,26 @@ def invoke(
             result_code=result.code,
             evidence=result.evidence,
         )
+        if spec.operation_finalizer is not None:
+            try:
+                spec.operation_finalizer(args)
+            except Exception as exc:
+                result = replace(
+                    result,
+                    outcome=Outcome.WARNING,
+                    summary=(
+                        f"{result.summary} The operation postcondition could not "
+                        "be finalized."
+                    ),
+                    code="III_OPERATION_POSTCONDITION_FAILED",
+                    findings=(
+                        *result.findings,
+                        Finding(
+                            "III_OPERATION_POSTCONDITION_FAILED",
+                            str(exc),
+                        ),
+                    ),
+                )
     return result, stderr_buffer.getvalue()
 
 
