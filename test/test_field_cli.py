@@ -17,6 +17,11 @@ def test_field_parser_declares_offline_verify_read_only() -> None:
     assert inventory[("field", "verify")].mutating is False
 
 
+def test_connected_readiness_parser_accepts_split_hil_aircraft_target() -> None:
+    arguments = build_parser().parse_args(["field", "check", "--target", "hil"])
+    assert arguments.target == "hil"
+
+
 def target():
     return {
         "selector": "real",
@@ -250,6 +255,225 @@ def test_check_exit_families_and_sealed_records(monkeypatch, tmp_path):
     assert Path(failed.evidence[0]).is_file()
     assert Path(failed.evidence[1]).is_file()
     assert failed.payload["authorization"] is False
+
+
+def test_check_seals_split_hil_aircraft_readiness(monkeypatch, tmp_path):
+    selected = {
+        "selector": "hil",
+        "endpoint": "iii.local",
+        "logical_id": "drone",
+        "runtime_profile": "hil",
+    }
+    monkeypatch.setattr(field, "_target", lambda _args: selected)
+    state = observations(profile="hil")
+    arguments = check_args(tmp_path / "hil", state)
+    arguments.target = "hil"
+
+    result = field.check(arguments)
+
+    assert result.exit_code == 0
+    assert result.profile == "hil"
+    assert result.payload["target"]["profile"] == "hil"
+
+
+def _live_receiver(release_id: str = RELEASE_ID):
+    return {
+        "boot_id": "boot-hil",
+        "live_state": {
+            "active_release_id": release_id,
+            "configuration_hash": "c" * 64,
+            "commissioning_hash": "d" * 64,
+        },
+        "active_release_manifest": {
+            "release_id": release_id,
+            "profiles": [
+                {
+                    "id": "hil",
+                    "status": "commissioned",
+                    "parameter_profile": "sim",
+                    "health": {
+                        "required_hardware_roles": [],
+                        "optional_hardware_roles": [],
+                        "required_managed_nodes": {"mission_executor": "active"},
+                        "required_services": ["micro_ros_agent"],
+                    },
+                }
+            ],
+        },
+        "clock": {"gate": "OPERATIONAL", "fault": None},
+        "recovery": {"flight_capable": True, "recovery_only": False},
+        "portable_backup": {"backup_fresh": True},
+    }
+
+
+def _runtime_response(command: str):
+    if command == "runtime.status":
+        return {
+            "accepted": True,
+            "result": {
+                "daemon": {
+                    "booted": True,
+                    "profile": "hil",
+                    "managed_nodes": {"mission_executor": "active"},
+                    "processes": {
+                        "mission_executor": {
+                            "alive": True,
+                            "recovery_in_progress": False,
+                        }
+                    },
+                    "services": {
+                        "micro_ros_agent": {
+                            "alive": True,
+                            "ready": True,
+                        }
+                    },
+                }
+            },
+        }
+    return {
+        "accepted": True,
+        "result": {
+            "status": {
+                "specification": {
+                    "catalog_id": "inspection-production",
+                    "catalog_ready": True,
+                    "active_profile": "hil",
+                },
+                "required_modes_registered": True,
+                "preflight": {"items": [{"key": "storage", "passed": True}]},
+            }
+        },
+    }
+
+
+def test_live_hil_observations_use_authenticated_subsystem_facts(monkeypatch):
+    import iii.gc_application as gc_module
+    import iii.runtime_api_client as runtime_module
+    import iii.ssh_manager as ssh_module
+
+    class Manager:
+        def verify_logical_target(self, **_kwargs):
+            return _live_receiver()
+
+        def px4_audit(self, **_kwargs):
+            return {
+                "audit": {
+                    "status": {"connected": True},
+                    "findings": [],
+                    "parameter_manifest_id": "e" * 64,
+                },
+                "activation_evidence": {
+                    "profile": "sim",
+                    "comparison": {
+                        "required_match": True,
+                        "inventory_complete": True,
+                    },
+                },
+            }
+
+    class Runtime:
+        endpoints = []
+
+        @classmethod
+        def from_env(cls, *, endpoint=None):
+            cls.endpoints.append(endpoint)
+            return cls()
+
+        def command(self, command, _parameters):
+            return _runtime_response(command)
+
+        def configuration_state(self):
+            return {
+                "manifest": {
+                    "status": {
+                        "configuration_server_available": True,
+                        "pending_edits": False,
+                        "configuration_divergent": False,
+                        "mirror_state": "current",
+                        "pending_restart": False,
+                    }
+                }
+            }
+
+    class QGCConfig:
+        def managed_settings_match(self):
+            return True
+
+    class Store:
+        def state(self):
+            return {"active_release_id": RELEASE_ID}
+
+        def _verified_release_slot(self, _release_id):
+            return {}
+
+        def _qgc_configuration_store(self, _slot):
+            return QGCConfig()
+
+    monkeypatch.setattr(ssh_module, "SSHManager", Manager)
+    monkeypatch.setattr(runtime_module, "RuntimeApiClient", Runtime)
+    gc_environments = []
+
+    def gc_store(args, **_kwargs):
+        gc_environments.append(args._iii_environment)
+        return Store()
+
+    monkeypatch.setattr(gc_module, "_store", gc_store)
+
+    result = field._live_observations(
+        SimpleNamespace(
+            _iii_environment={
+                "III_RELEASE_TRUSTED_SIGNERS": "/trusted/field-signers.json"
+            },
+            trusted_signers=None,
+        ),
+        {
+            "runtime_profile": "hil",
+            "selector": "hil",
+            "endpoint": "iii.local",
+            "logical_id": "drone",
+        },
+    )
+
+    assert result["release_pair_compatible"] is True
+    assert result["clock_gate_valid"] is True
+    assert result["runtime_healthy"] is True
+    assert result["required_hardware_ready"] is True
+    assert result["px4_firmware_matches"] is True
+    assert result["px4_required_parameters_match"] is True
+    assert result["parameter_reconciliation_complete"] is True
+    assert result["selected_mission_valid"] is True
+    assert result["qgc_managed_settings_match"] is True
+    assert Runtime.endpoints == ["iii.local"]
+    assert gc_environments == [
+        {
+            "III_RELEASE_TRUSTED_SIGNERS": "/trusted/field-signers.json",
+            "III_GC_TRUSTED_SIGNERS": "/trusted/field-signers.json",
+        }
+    ]
+
+
+def test_live_observations_fail_closed_on_degraded_configuration():
+    status = {
+        "configuration_server_available": True,
+        "pending_edits": False,
+        "configuration_divergent": False,
+        "mirror_state": "degraded",
+    }
+    assert field._configuration_valid(status) is False
+    status["mirror_state"] = "current"
+    assert field._configuration_valid(status) is True
+
+
+def test_cold_restart_state_is_independent_of_mirror_durability():
+    status = {
+        "configuration_server_available": True,
+        "pending_restart": False,
+        "mirror_state": "degraded",
+    }
+    assert field._cold_restart_clear(status) is True
+
+    status["pending_restart"] = True
+    assert field._cold_restart_clear(status) is False
 
 
 def test_check_reports_verified_external_archive_coverage(monkeypatch, tmp_path):

@@ -931,7 +931,16 @@ def _validate_record(record: Mapping[str, Any]) -> None:
         raise RegistryError("archive record domain is invalid")
     unit = _safe_locator(str(record.get("locator", "")))
     expected_root = dict(DOMAIN_ROOTS).get(str(record["domain"]))
-    if (
+    interrupted_capture = (
+        record["domain"] == "captures"
+        and expected_root == PurePosixPath("captures")
+        and len(unit.parts) == 3
+        and unit.parts[:2] == ("captures", ".partial")
+        and re.fullmatch(
+            r"(?:[a-f0-9]{32}|import-[a-f0-9]{64})\.json", unit.name
+        )
+    )
+    if not interrupted_capture and (
         expected_root is None
         or len(unit.parts) != len(expected_root.parts) + 1
         or unit.parts[: len(expected_root.parts)] != expected_root.parts

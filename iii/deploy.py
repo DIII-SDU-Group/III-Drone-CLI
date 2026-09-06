@@ -80,23 +80,38 @@ def _reject(
         profile=str(target["runtime_profile"]) if target else None,
         release_id=release_id,
         findings=(Finding(code, str(exc)),),
-        next_actions=((
-            NextAction(
-                (
-                    "iii", "px4", "release", "prepare",
-                    "--release-directory", "<qualified-px4-artifact>",
-                    "--destination", "<new-px4-media-directory>",
+        next_actions=(
+            (
+                NextAction(
+                    (
+                        "iii",
+                        "px4",
+                        "release",
+                        "prepare",
+                        "--release-directory",
+                        "<qualified-px4-artifact>",
+                        "--destination",
+                        "<new-px4-media-directory>",
+                    ),
+                    "Prepare the exact PX4 firmware and microSD files, then follow the generated flashing instructions.",
+                    mutating=True,
+                    confirmation_required=True,
                 ),
-                "Prepare the exact PX4 firmware and microSD files, then follow the generated flashing instructions.",
-                mutating=True,
-                confirmation_required=True,
             )
-        ) if px4_required else (
-            NextAction(
-                ("iii", "deploy", "status", "--target", "real"),
-                "Inspect authenticated target and deployment state.",
-            ),
-        )),
+            if px4_required
+            else (
+                NextAction(
+                    (
+                        "iii",
+                        "deploy",
+                        "status",
+                        "--target",
+                        str(target["selector"]) if target else "real",
+                    ),
+                    "Inspect authenticated target and deployment state.",
+                ),
+            )
+        ),
     )
 
 
@@ -141,7 +156,7 @@ def _require_remote(selected: Mapping[str, Any]) -> None:
     if (
         selected["endpoint"] != "iii.local"
         or selected["execution_host"] != "aircraft"
-        or selected["runtime_profile"] not in {"real", "opti_track"}
+        or selected["runtime_profile"] not in {"real", "opti_track", "hil"}
     ):
         raise ValueError(
             "deployment receiver operations require an explicit onboard aircraft target"
@@ -188,7 +203,9 @@ def _field_bundle_release(
     if any(value != selected_release for value in manifests.values()):
         raise ValueError("selected field component release manifests disagree")
     bundle_source_identity = selected_release.get("source_identity")
-    if bundle_source_identity is None and isinstance(selected_release.get("source"), dict):
+    if bundle_source_identity is None and isinstance(
+        selected_release.get("source"), dict
+    ):
         bundle_source_identity = selected_release["source"].get("content_identity")
     if bundle_source_identity != source_identity:
         raise ValueError(
@@ -514,13 +531,9 @@ def receiver_update_apply(args: argparse.Namespace) -> CommandResult:
         ContractRegistry(_workspace() / "deployment/schemas/v1").validate(
             "receiver-update-actual", actual
         )
-        path = store.write_record(
-            identifier, "receiver-update-actual.json", actual
-        )
+        path = store.write_record(identifier, "receiver-update-actual.json", actual)
     except Exception as exc:
-        return _reject(
-            "iii deploy receiver-update apply", exc, target=selected
-        )
+        return _reject("iii deploy receiver-update apply", exc, target=selected)
     return CommandResult(
         command="iii deploy receiver-update apply",
         outcome=Outcome.SUCCESS,
@@ -670,7 +683,13 @@ def stage(args: argparse.Namespace) -> CommandResult:
         payload=actual,
         next_actions=(
             NextAction(
-                ("iii", "deploy", "status", "--target", "real"),
+                (
+                    "iii",
+                    "deploy",
+                    "status",
+                    "--target",
+                    str(selected["selector"]),
+                ),
                 "Verify terminal staging state after detached execution.",
             ),
         ),
@@ -855,28 +874,60 @@ def _px4_activation_evidence(
     """Request the receiver-owned, read-only Ethernet FMU release audit."""
 
     parameter_profile = str(selected.get("parameter_profile", ""))
-    if parameter_profile != "real":
-        raise ValueError("deployment PX4 release audit requires the real target profile")
+    runtime_profile = str(selected.get("runtime_profile", ""))
+    if parameter_profile != "real" and not (
+        parameter_profile == "sim" and runtime_profile == "hil"
+    ):
+        raise ValueError(
+            "deployment PX4 release audit requires the real or remote HIL target profile"
+        )
     operation_id = getattr(args, "_iii_operation_id", None)
     if not isinstance(operation_id, str):
         raise ValueError("PX4 release audit requires a retained operation ID")
-    result = _manager().px4_audit(
-        release_id=release_id, operation_id=operation_id
-    )
-    audit = result.get("audit")
-    evidence = result.get("activation_evidence")
-    if not isinstance(audit, dict) or audit.get("healthy") is not True:
+    # A complete MAVLink parameter inventory is a multi-request exchange. A
+    # transiently missed heartbeat or incomplete inventory must not turn a
+    # healthy, already paired FMU into a field-flashing instruction. Retry only
+    # transport/inventory findings; deterministic identity or parameter drift
+    # still fails immediately and closed.
+    transient_findings = {
+        "PX4_UNREACHABLE",
+        "PX4_PARAMETER_INVENTORY_INCOMPLETE",
+        # This is a derived consequence of a missed firmware identity, not an
+        # independent mismatch, and therefore travels with the retryable audit.
+        "PX4_DDS_TOPIC_CONTRACT_UNPROVEN",
+    }
+    for attempt in range(3):
+        attempt_operation_id = (
+            operation_id
+            if attempt == 0
+            else _child_operation_id(operation_id, f"px4-audit-{attempt + 1}")
+        )
+        result = _manager().px4_audit(
+            release_id=release_id, operation_id=attempt_operation_id
+        )
+        audit = result.get("audit")
+        evidence = result.get("activation_evidence")
+        if (
+            isinstance(audit, dict)
+            and audit.get("healthy") is True
+            and isinstance(evidence, dict)
+            and evidence.get("healthy") is True
+        ):
+            return evidence
         findings = audit.get("findings", []) if isinstance(audit, dict) else []
-        codes = ", ".join(
-            str(item.get("code")) for item in findings if isinstance(item, dict)
-        )
-        raise PX4ReleaseRequiredError(
-            "PX4 does not match the staged release"
-            + (f" ({codes})" if codes else "")
-        )
-    if not isinstance(evidence, dict) or evidence.get("healthy") is not True:
-        raise PX4ReleaseRequiredError("PX4 activation evidence is incomplete")
-    return evidence
+        codes = {
+            str(item.get("code"))
+            for item in findings
+            if isinstance(item, dict) and item.get("code")
+        }
+        if not codes or not codes.issubset(transient_findings) or attempt == 2:
+            rendered = ", ".join(sorted(codes))
+            raise PX4ReleaseRequiredError(
+                "PX4 does not match the staged release"
+                + (f" ({rendered})" if rendered else "")
+            )
+        time.sleep(0.5)
+    raise AssertionError("PX4 audit retry loop did not terminate")
 
 
 def activate(args: argparse.Namespace) -> CommandResult:
@@ -1025,7 +1076,13 @@ def continue_configuration_review(args: argparse.Namespace) -> CommandResult:
         payload={"review": review, "decisions": decisions, "activation": actual},
         next_actions=(
             NextAction(
-                ("iii", "deploy", "status", "--target", "real"),
+                (
+                    "iii",
+                    "deploy",
+                    "status",
+                    "--target",
+                    str(selected["selector"]),
+                ),
                 "Verify the detached operation and paired configuration checkpoint.",
             ),
         ),
@@ -1108,7 +1165,13 @@ def _activate_or_rollback(args: argparse.Namespace, action: str) -> CommandResul
         payload=actual,
         next_actions=(
             NextAction(
-                ("iii", "deploy", "status", "--target", "real"),
+                (
+                    "iii",
+                    "deploy",
+                    "status",
+                    "--target",
+                    str(selected["selector"]),
+                ),
                 "Verify the detached operation and final selector state.",
             ),
         ),
@@ -1211,6 +1274,44 @@ def _source_impact(
     return snapshot, impact
 
 
+def _field_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    """Validate the complete immutable field selection before confirmation."""
+
+    selected = _target(args)
+    _require_remote(selected)
+    if args.activate and not args.configuration_checkpoint_id:
+        raise ValueError(
+            "--configuration-checkpoint-id is required when --activate is requested"
+        )
+    root = _workspace()
+    snapshot, impact = _source_impact(
+        root, args.include_mission, args.exclude_mission, args.component
+    )
+    bundle_root = args.bundle_set.resolve()
+    release = _field_bundle_release(
+        bundle_root,
+        components=impact["components"],
+        source_identity=snapshot["content_identity"],
+        selected_missions=impact["missions"]["selected"],
+    )
+    return {
+        "schema": "iii.field-deployment-preflight/v1",
+        "release_id": release["release_id"],
+        "source_identity": snapshot["content_identity"],
+        "impact_id": impact["impact_id"],
+        "components": impact["components"],
+        "missions": impact["missions"]["selected"],
+        "bundle_set": str(bundle_root),
+        "configuration_checkpoint_id": args.configuration_checkpoint_id,
+        "activate": bool(args.activate),
+        "target": {
+            "selector": selected["selector"],
+            "logical_id": selected["logical_id"],
+            "profile": selected["runtime_profile"],
+        },
+    }
+
+
 def _gc_application_store(args: argparse.Namespace):
     from .gc_application import _store
 
@@ -1308,6 +1409,31 @@ def _child_operation_id(parent: str, suffix: str) -> str:
     return f"{parent[:31].rstrip('-')}-{identity}"
 
 
+def _stage_confirmed_release_already_active(
+    terminal: Mapping[str, Any], release_id: str
+) -> bool:
+    operation = terminal.get("operation")
+    status = terminal.get("status")
+    if not isinstance(operation, Mapping) or not isinstance(status, Mapping):
+        return False
+    result = operation.get("result")
+    return (
+        isinstance(result, Mapping)
+        and result.get("staged") is False
+        and _status_confirms_release_active(status, release_id)
+    )
+
+
+def _status_confirms_release_active(
+    status: Mapping[str, Any], release_id: str
+) -> bool:
+    live_state = status.get("live_state")
+    return (
+        isinstance(live_state, Mapping)
+        and live_state.get("active_release_id") == release_id
+    )
+
+
 def field(args: argparse.Namespace) -> CommandResult:
     from iii_deployment.contracts import ContractRegistry
 
@@ -1378,6 +1504,7 @@ def field(args: argparse.Namespace) -> CommandResult:
         gc_previous_release = None
         gc_candidate_manifest = None
         gc_activated = False
+        authenticated_status = None
         timeout_seconds = float(
             _environment(args).get("III_DEPLOY_AWAIT_TIMEOUT_SEC", "1205")
         )
@@ -1394,37 +1521,57 @@ def field(args: argparse.Namespace) -> CommandResult:
                 raise ValueError(
                     "paired field update requires a previously active GC release for deterministic rollback"
                 )
-            result = _install_gc_application(
-                bundle_root / "gc",
-                release_id=release_id,
-                store=gc_store,
-            )
-            phases.append({"name": "gc-stage", "state": "staged", "result": result})
-            gc_candidate_manifest = gc_store.release_manifest(release_id)
-            if args.activate:
-                manager = _manager()
-                safety_status = _remote_status(
-                    manager,
-                    selected,
-                    _child_operation_id(identifier, "gc-safety"),
-                )
-                activated_gc = gc_store.activate(
-                    release_id,
-                    operation_id=_child_operation_id(identifier, "gc-activate"),
-                    safety=_gc_safety(safety_status, selected),
-                    override_reason=getattr(args, "gc_override_reason", None),
-                    override_confirmation=getattr(
-                        args, "gc_override_confirmation", None
-                    ),
-                )
-                gc_activated = True
+            if gc_previous_release == release_id:
                 phases.append(
                     {
-                        "name": "gc-activate",
-                        "state": "activated",
-                        "result": activated_gc,
+                        "name": "gc-stage",
+                        "state": "skipped",
+                        "reason": "exact release is already active",
                     }
                 )
+                if args.activate:
+                    phases.append(
+                        {
+                            "name": "gc-activate",
+                            "state": "skipped",
+                            "reason": "exact release is already active",
+                        }
+                    )
+            else:
+                result = _install_gc_application(
+                    bundle_root / "gc",
+                    release_id=release_id,
+                    store=gc_store,
+                )
+                phases.append(
+                    {"name": "gc-stage", "state": "staged", "result": result}
+                )
+                gc_candidate_manifest = gc_store.release_manifest(release_id)
+                if args.activate:
+                    manager = _manager()
+                    safety_status = _remote_status(
+                        manager,
+                        selected,
+                        _child_operation_id(identifier, "gc-safety"),
+                    )
+                    authenticated_status = safety_status
+                    activated_gc = gc_store.activate(
+                        release_id,
+                        operation_id=_child_operation_id(identifier, "gc-activate"),
+                        safety=_gc_safety(safety_status, selected),
+                        override_reason=getattr(args, "gc_override_reason", None),
+                        override_confirmation=getattr(
+                            args, "gc_override_confirmation", None
+                        ),
+                    )
+                    gc_activated = True
+                    phases.append(
+                        {
+                            "name": "gc-activate",
+                            "state": "activated",
+                            "result": activated_gc,
+                        }
+                    )
         else:
             phases.append(
                 {
@@ -1436,27 +1583,46 @@ def field(args: argparse.Namespace) -> CommandResult:
         if "drone" in selected_components:
             manager = manager or _manager()
             try:
-                stage_operation = _child_operation_id(identifier, "stage")
-                staged = _stage_component(
-                    manager,
-                    bundle_root / "drone",
-                    selected=selected,
-                    operation_id=stage_operation,
-                    status_index=args.status_index,
+                if authenticated_status is None:
+                    authenticated_status = _remote_status(
+                        manager,
+                        selected,
+                        _child_operation_id(identifier, "current-release"),
+                    )
+                already_active = _status_confirms_release_active(
+                    authenticated_status, release_id
                 )
-                staged_terminal = _await_receiver_operation(
-                    manager,
-                    selected,
-                    stage_operation,
-                    timeout_seconds=timeout_seconds,
-                )
-                phases.append(
-                    {
-                        "name": "drone-stage",
-                        "state": "completed",
-                        "result": {**staged, "terminal": staged_terminal},
-                    }
-                )
+                if already_active:
+                    staged_terminal = authenticated_status
+                    phases.append(
+                        {
+                            "name": "drone-stage",
+                            "state": "skipped",
+                            "reason": "exact release is already active",
+                        }
+                    )
+                else:
+                    stage_operation = _child_operation_id(identifier, "stage")
+                    staged = _stage_component(
+                        manager,
+                        bundle_root / "drone",
+                        selected=selected,
+                        operation_id=stage_operation,
+                        status_index=args.status_index,
+                    )
+                    staged_terminal = _await_receiver_operation(
+                        manager,
+                        selected,
+                        stage_operation,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    phases.append(
+                        {
+                            "name": "drone-stage",
+                            "state": "completed",
+                            "result": {**staged, "terminal": staged_terminal},
+                        }
+                    )
                 if args.activate:
                     px4_evidence = _px4_activation_evidence(
                         args,
@@ -1475,55 +1641,71 @@ def field(args: argparse.Namespace) -> CommandResult:
                             },
                         }
                     )
-                    activation_operation = _child_operation_id(identifier, "activate")
-                    activated = _activation(
-                        manager,
-                        action="activate",
-                        operation_id=activation_operation,
-                        selected=selected,
-                        release_id=release_id,
-                        checkpoint=args.configuration_checkpoint_id,
-                        px4_activation_evidence=px4_evidence,
-                        decisions=_reconciliation_decisions(
-                            getattr(args, "decision", [])
-                        ),
-                    )
-                    if activated["receiver_acceptance"] is None:
-                        review_path, review = _retain_configuration_review(
-                            store=store,
-                            identifier=identifier,
+                    if already_active or _stage_confirmed_release_already_active(
+                        staged_terminal, release_id
+                    ):
+                        phases.append(
+                            {
+                                "name": "drone-activate",
+                                "state": "skipped",
+                                "reason": "exact release is already active",
+                            }
+                        )
+                    else:
+                        activation_operation = _child_operation_id(
+                            identifier, "activate"
+                        )
+                        activated = _activation(
+                            manager,
+                            action="activate",
+                            operation_id=activation_operation,
                             selected=selected,
                             release_id=release_id,
                             checkpoint=args.configuration_checkpoint_id,
-                            qualified=False,
-                            actual=activated,
-                            origin_command="iii deploy field",
+                            px4_activation_evidence=px4_evidence,
+                            decisions=_reconciliation_decisions(
+                                getattr(args, "decision", [])
+                            ),
+                        )
+                        if activated["receiver_acceptance"] is None:
+                            review_path, review = _retain_configuration_review(
+                                store=store,
+                                identifier=identifier,
+                                selected=selected,
+                                release_id=release_id,
+                                checkpoint=args.configuration_checkpoint_id,
+                                qualified=False,
+                                actual=activated,
+                                origin_command="iii deploy field",
+                            )
+                            phases.append(
+                                {
+                                    "name": "configuration-review",
+                                    "state": "review-required",
+                                    "review_id": review["review_id"],
+                                    "path": str(review_path),
+                                }
+                            )
+                            raise ValueError(
+                                "configuration reintroduction review is required; "
+                                "rerun the exact field deployment with one --decision per retained item"
+                            )
+                        activated_terminal = _await_receiver_operation(
+                            manager,
+                            selected,
+                            activation_operation,
+                            timeout_seconds=timeout_seconds,
                         )
                         phases.append(
                             {
-                                "name": "configuration-review",
-                                "state": "review-required",
-                                "review_id": review["review_id"],
-                                "path": str(review_path),
+                                "name": "drone-activate",
+                                "state": "completed",
+                                "result": {
+                                    **activated,
+                                    "terminal": activated_terminal,
+                                },
                             }
                         )
-                        raise ValueError(
-                            "configuration reintroduction review is required; "
-                            "rerun the exact field deployment with one --decision per retained item"
-                        )
-                    activated_terminal = _await_receiver_operation(
-                        manager,
-                        selected,
-                        activation_operation,
-                        timeout_seconds=timeout_seconds,
-                    )
-                    phases.append(
-                        {
-                            "name": "drone-activate",
-                            "state": "completed",
-                            "result": {**activated, "terminal": activated_terminal},
-                        }
-                    )
                 else:
                     phases.append(
                         {
@@ -1660,7 +1842,13 @@ def field(args: argparse.Namespace) -> CommandResult:
         payload=report,
         next_actions=(
             NextAction(
-                ("iii", "deploy", "status", "--target", "real"),
+                (
+                    "iii",
+                    "deploy",
+                    "status",
+                    "--target",
+                    str(selected["selector"]),
+                ),
                 "Verify detached receiver completion before runtime use.",
             ),
         ),
@@ -1883,7 +2071,7 @@ def _target_option(
 ) -> None:
     parser.add_argument(
         "--target",
-        choices=("sim", "real"),
+        choices=("sim", "real", "hil"),
         default=default,
         help="explicit per-command runtime target",
     )
@@ -2036,7 +2224,9 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         help="exact GC recovery warning confirmation",
     )
     _target_option(field_parser, default="real")
-    field_parser.set_defaults(func=field, _iii_mutating=True)
+    field_parser.set_defaults(
+        func=field, _iii_mutating=True, _iii_plan_provider=_field_preflight
+    )
 
     capture_parser = subparsers.add_parser(
         "configuration-capture",

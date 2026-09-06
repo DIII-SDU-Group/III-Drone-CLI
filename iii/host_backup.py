@@ -108,7 +108,7 @@ def _target(args: argparse.Namespace) -> dict[str, str]:
         selected["endpoint"] != "iii.local"
         or selected["execution_host"] != "aircraft"
         or selected["logical_id"] != "drone"
-        or selected["runtime_profile"] not in {"real", "opti_track"}
+        or selected["runtime_profile"] not in {"real", "opti_track", "hil"}
     ):
         raise ValueError("portable host backup requires the shared aircraft target")
     return {
@@ -307,7 +307,7 @@ def _download(manager, result: Mapping[str, Any], destination: Path) -> None:
                     payload={
                         "backup_id": backup_id,
                         "offset": offset,
-                        "length": min(4 * 1024 * 1024, expected_size - offset),
+                        "length": min(512 * 1024, expected_size - offset),
                     },
                 )["chunk"]
                 data = base64.b64decode(response["data_base64"], validate=True)

@@ -177,6 +177,13 @@ def test_key_only_fixed_endpoint_options_never_forward_agent_or_use_password(
     assert "ForwardAgent=no" in argv and "ClearAllForwardings=yes" in argv
     assert "StrictHostKeyChecking=no" in argv
     assert "UserKnownHostsFile=/dev/null" in argv
+    assert "SendEnv=-LANG" in argv and "SendEnv=-LC_*" in argv
+    assert "ControlMaster=auto" in argv
+    assert "ControlPersist=5s" in argv
+    control_option = next(item for item in argv if item.startswith("ControlPath="))
+    control_path = Path(control_option.removeprefix("ControlPath=")).parent
+    assert control_path.is_dir()
+    assert control_path.stat().st_mode & 0o077 == 0
     assert "sshpass" not in serialized
     assert private.read_text() not in serialized
     assert "not authenticated" in manager.accepted_host_risk
@@ -186,6 +193,24 @@ def test_key_only_fixed_endpoint_options_never_forward_agent_or_use_password(
             public_key_file=public,
             environment={"III_SSH_HOST": "attacker.local", "III_SSH_USER": "iii"},
         )
+
+
+def test_explicit_control_path_is_used_from_injected_environment(
+    tmp_path: Path,
+) -> None:
+    private, public = _identity(tmp_path)
+    runner = GatewayRunner()
+    requested = str(tmp_path / "control" / "%C")
+    manager = SSHManager(
+        identity_file=private,
+        public_key_file=public,
+        environment={"III_SSH_CONTROL_PATH": requested},
+        runner=runner,
+    )
+
+    manager.verify_logical_target(profile="real", operation_id="target-probe-0006")
+
+    assert f"ControlPath={requested}" in runner.calls[0][0]
 
 
 def test_complete_bundle_upload_is_resumable_fixed_root_and_records_budget(

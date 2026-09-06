@@ -136,3 +136,32 @@ def test_pending_machine_plans_proof_without_active_status_probe(
 
     assert planned["plan"]["target"]["logical_id"] == "drone"
     assert manager.actions == ["plan-access"]
+
+
+def test_access_preflights_reuse_retained_receiver_nonce(monkeypatch, tmp_path: Path) -> None:
+    retained = {
+        "plan": {"operation_id": "access-operation-0001"},
+        "nonce": {"nonce_id": "c" * 64},
+    }
+    monkeypatch.setattr(access, "_retained_preflight", lambda _args: retained)
+    monkeypatch.setattr(
+        access,
+        "_manager",
+        lambda _args: (_ for _ in ()).throw(AssertionError("receiver was replanned")),
+    )
+    args = argparse.Namespace(
+        directory=tmp_path / "already-created",
+        enrollment=tmp_path / "enrollment.json",
+        label="gc-primary",
+        phase="add",
+        target="hil",
+        signer_passphrase_file=tmp_path / "missing-passphrase",
+        keyring_account=None,
+        authority="machine",
+        machine_id="d" * 64,
+        field_signer_id=None,
+    )
+
+    assert access.prepare_preflight(args) == retained
+    assert access.enroll_preflight(args) == retained
+    assert access.revoke_preflight(args) == retained

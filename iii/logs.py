@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -481,7 +482,13 @@ def _rejection(command: str, exc: Exception, selected=None) -> CommandResult:
         findings=(Finding(code, str(exc)),),
         next_actions=(
             NextAction(
-                ("iii", "deploy", "status", "--target", "real"),
+                (
+                    "iii",
+                    "deploy",
+                    "status",
+                    "--target",
+                    selected.get("runtime_profile", "real") if selected else "real",
+                ),
                 "Inspect authenticated receiver state.",
             ),
         ),
@@ -503,32 +510,36 @@ def pull(args: argparse.Namespace) -> CommandResult:
         operation_id = args._iii_operation_id
         manager = _manager()
         manifest = _retained_manifest(args)
-        root, local = _materialize_pull(args, manager, selected, manifest, operation_id)
-        verified = [
-            {
-                "locator": item["locator"],
-                "content_id": item["content_id"],
-                "size": item["size"],
-            }
-            for item in manifest["files"]
-        ]
-        planned = _request(
-            manager,
-            action="plan-log-receipt",
-            operation_id=operation_id,
-            payload={
-                "manifest_id": manifest["manifest_id"],
-                "verified_files": verified,
-                "target": _binding(selected),
-            },
-        )
-        accepted = _request(
-            manager,
-            action="log-receipt",
-            operation_id=operation_id,
-            payload={"plan": planned["plan"]},
-            nonce=planned["nonce"],
-        )
+        session = getattr(manager, "persistent_receiver", nullcontext)
+        with session():
+            root, local = _materialize_pull(
+                args, manager, selected, manifest, operation_id
+            )
+            verified = [
+                {
+                    "locator": item["locator"],
+                    "content_id": item["content_id"],
+                    "size": item["size"],
+                }
+                for item in manifest["files"]
+            ]
+            planned = _request(
+                manager,
+                action="plan-log-receipt",
+                operation_id=operation_id,
+                payload={
+                    "manifest_id": manifest["manifest_id"],
+                    "verified_files": verified,
+                    "target": _binding(selected),
+                },
+            )
+            accepted = _request(
+                manager,
+                action="log-receipt",
+                operation_id=operation_id,
+                payload={"plan": planned["plan"]},
+                nonce=planned["nonce"],
+            )
         receipt_id = planned["plan"]["parameters"]["receipt_id"]
         record = {
             "schema": "iii.log-pull-actual/v1",
@@ -574,7 +585,15 @@ def pull(args: argparse.Namespace) -> CommandResult:
         },
         next_actions=(
             NextAction(
-                ("iii", "logs", "prune", "--pulled", receipt_id, "--target", "real"),
+                (
+                    "iii",
+                    "logs",
+                    "prune",
+                    "--pulled",
+                    receipt_id,
+                    "--target",
+                    selected["runtime_profile"],
+                ),
                 "Plan exact deletion of only this verified pull when onboard space is needed.",
                 mutating=True,
                 confirmation_required=True,
@@ -638,7 +657,7 @@ def prune(args: argparse.Namespace) -> CommandResult:
         payload={"prune_plan": retained, "receiver_acceptance": accepted},
         next_actions=(
             NextAction(
-                ("iii", "deploy", "status", "--target", "real"),
+                ("iii", "deploy", "status", "--target", selected["runtime_profile"]),
                 "Verify terminal receiver operation state.",
             ),
         ),
@@ -651,7 +670,9 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "pull", help="verify and retain aircraft logs locally"
     )
     pull_parser.add_argument("--destination", type=Path)
-    pull_parser.add_argument("--target", choices=("sim", "real"), default="real")
+    pull_parser.add_argument(
+        "--target", choices=("sim", "real", "hil"), default="real"
+    )
     pull_parser.set_defaults(
         func=pull,
         log_domain="logs",
@@ -662,7 +683,9 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "prune", help="delete only exact content covered by a verified pull receipt"
     )
     prune_parser.add_argument("--pulled", required=True, metavar="RECEIPT_ID")
-    prune_parser.add_argument("--target", choices=("sim", "real"), default="real")
+    prune_parser.add_argument(
+        "--target", choices=("sim", "real", "hil"), default="real"
+    )
     prune_parser.set_defaults(
         func=prune,
         _iii_mutating=True,

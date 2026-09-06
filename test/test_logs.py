@@ -155,6 +155,24 @@ def test_pull_hash_verifies_before_receipt_and_duplicate_is_idempotent(
     assert duplicate.payload["local_manifest"] == first.payload["local_manifest"]
 
 
+def test_pull_preserves_hil_target_in_follow_up(monkeypatch, tmp_path: Path) -> None:
+    content = b'{"event":"hil"}\n'
+    source_manifest = manifest(content)
+    manager = Manager(content, source_manifest)
+    hil_target = {**target(), "runtime_profile": "hil"}
+    pull_args = args(tmp_path, source_manifest, operation="iii-hil-log-pull")
+    pull_args.target = "hil"
+    pull_args._iii_retained_plan["preflight"]["target"]["profile"] = "hil"
+    monkeypatch.setattr(logs, "_target", lambda _args: hil_target)
+    monkeypatch.setattr(logs, "_manager", lambda: manager)
+
+    result = logs.pull(pull_args)
+
+    assert result.outcome.value == "success"
+    assert result.profile == "hil"
+    assert result.next_actions[0].command[-1] == "hil"
+
+
 def test_duplicate_pull_rejects_rebound_local_manifest(
     monkeypatch, tmp_path: Path
 ) -> None:

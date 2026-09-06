@@ -126,7 +126,7 @@ def _hardware_target(args: argparse.Namespace) -> dict[str, Any]:
         selected["endpoint"] != "iii.local"
         or selected["execution_host"] != "aircraft"
         or selected["logical_id"] != "drone"
-        or selected["runtime_profile"] not in {"real", "opti_track"}
+        or selected["runtime_profile"] not in {"real", "opti_track", "hil"}
     ):
         raise ValueError("hardware inspection requires the shared aircraft target")
     return selected
@@ -382,7 +382,7 @@ def hardware_inspect(args: argparse.Namespace) -> CommandResult:
 def _hardware_inspect_parser(
     parser: argparse.ArgumentParser, *, command: str, scope: str
 ) -> None:
-    parser.add_argument("--target", choices=("real", "opti_track"), default="real")
+    parser.add_argument("--target", choices=("real", "opti_track", "hil"), default="real")
     parser.add_argument(
         "--capture",
         type=Path,

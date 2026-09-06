@@ -271,7 +271,9 @@ def test_receiver_update_apply_uploads_plans_accepts_and_retains_exact_actual(
     assert result.outcome.value == "success", result.findings
     assert order == ["receiver-transfer", "plan-receiver-update", "receiver-update"]
     actual = json.loads(
-        (tmp_path / "operations/iii-receiver-update-0001/receiver-update-actual.json").read_text()
+        (
+            tmp_path / "operations/iii-receiver-update-0001/receiver-update-actual.json"
+        ).read_text()
     )
     assert actual == result.payload
     assert actual["receiver_id"] == receiver_id
@@ -388,7 +390,7 @@ def test_configuration_review_is_retained_and_continued_with_exact_decisions(
     assert order == ["plan-activate", "plan-activate", "activate"]
 
 
-def test_field_dry_run_retains_exact_plan_without_reading_bundle(monkeypatch, tmp_path):
+def test_field_dry_run_rejects_missing_bundle_during_preflight(monkeypatch, tmp_path):
     monkeypatch.setenv("CLI_CONFIGURATION", "dev")
     monkeypatch.setenv("III_OPERATION_STATE_DIR", str(tmp_path))
     output = StringIO()
@@ -409,10 +411,10 @@ def test_field_dry_run_retains_exact_plan_without_reading_bundle(monkeypatch, tm
         stderr=StringIO(),
     )
     value = json.loads(output.getvalue())
-    assert status == 0
-    assert value["code"] == "III_OPERATION_PLAN_READY"
-    assert value["context"]["target"] == "real"
-    assert list(tmp_path.glob("*/plan.json"))
+    assert status == 20
+    assert value["code"] == "III_OPERATION_ERROR"
+    assert "release manifest is missing" in value["findings"][0]["message"]
+    assert not list(tmp_path.glob("*/plan.json"))
 
 
 def _impact(*components):
@@ -473,13 +475,19 @@ def test_source_impact_rejects_local_test_mission_include(monkeypatch, tmp_path)
             "impact": {"components": ["drone"], "causes": {"drone": ["source"]}},
         },
     )
-    monkeypatch.setattr(source_module, "validate_component_selection", lambda *_args: None)
+    monkeypatch.setattr(
+        source_module, "validate_component_selection", lambda *_args: None
+    )
     monkeypatch.setattr(
         field_impact_module,
         "detailed_field_impact",
         lambda *_args: {
             "detail_id": "3" * 64,
-            "missions": {"entries": [], "behavior_trees": [], "catalog_identity": "4" * 64},
+            "missions": {
+                "entries": [],
+                "behavior_trees": [],
+                "catalog_identity": "4" * 64,
+            },
             "parameters": {
                 "manifest": {},
                 "parameter_sets": [],
@@ -521,6 +529,31 @@ def _field_args(tmp_path, bundle, *, activate=False, checkpoint=CHECKPOINT):
         _iii_operation_id="iii-fake-field-operation",
         _iii_environment={"III_OPERATION_STATE_DIR": str(tmp_path / "operations")},
     )
+
+
+def test_field_command_preflights_selection_before_confirmation():
+    inventory = inventory_parser(build_parser())
+    spec = inventory[("deploy", "field")]
+
+    assert spec.mutating is True
+    assert spec.plan_provider is deploy._field_preflight
+
+
+def test_field_preflight_rejects_invalid_component_selection(monkeypatch, tmp_path):
+    bundle = tmp_path / "bundle"
+    args = _field_args(tmp_path, bundle)
+    args.component = ["drone"]
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+    monkeypatch.setattr(
+        deploy,
+        "_source_impact",
+        lambda *_args: (_ for _ in ()).throw(
+            ValueError("unsafe manual component omission: gc")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="unsafe manual component omission: gc"):
+        deploy._field_preflight(args)
 
 
 def test_gc_only_field_flow_never_contacts_drone(monkeypatch, tmp_path):
@@ -592,8 +625,7 @@ def test_field_staging_does_not_require_an_activation_checkpoint(monkeypatch, tm
     assert result.outcome.value == "success"
     plan = json.loads(
         (
-            tmp_path
-            / "operations/iii-fake-field-operation/deployment-impact.json"
+            tmp_path / "operations/iii-fake-field-operation/deployment-impact.json"
         ).read_text()
     )
     assert plan["configuration_checkpoint_id"] is None
@@ -602,7 +634,9 @@ def test_field_staging_does_not_require_an_activation_checkpoint(monkeypatch, tm
 def test_field_activation_requires_a_configuration_checkpoint(monkeypatch, tmp_path):
     monkeypatch.setattr(deploy, "_target", lambda _args: target())
 
-    result = deploy.field(_field_args(tmp_path, tmp_path / "absent", activate=True, checkpoint=None))
+    result = deploy.field(
+        _field_args(tmp_path, tmp_path / "absent", activate=True, checkpoint=None)
+    )
 
     assert result.outcome.value == "rejected"
     assert result.code == "III_DEPLOY_CONTRACT_REJECTED"
@@ -631,7 +665,7 @@ def test_drone_only_field_flow_never_reads_gc_bundle(monkeypatch, tmp_path):
     result = deploy.field(_field_args(tmp_path, bundle))
 
     assert result.outcome.value == "success"
-    assert order == ["drone-transfer", "plan-stage", "stage", "status"]
+    assert order == ["status", "drone-transfer", "plan-stage", "stage", "status"]
     assert result.payload["actual"]["phases"][0] == {
         "name": "gc-stage",
         "state": "skipped",
@@ -816,6 +850,50 @@ def test_standalone_stage_and_activate_persist_self_identifying_actuals(
         assert len(actual["actual_id"]) == 64
 
 
+def test_standalone_stage_next_action_preserves_hil_target(monkeypatch, tmp_path):
+    component_root = tmp_path / "drone"
+    component(component_root)
+    selected = {
+        **target(),
+        "selector": "hil",
+        "runtime_profile": "hil",
+        "parameter_profile": "sim",
+    }
+    monkeypatch.setattr(deploy, "_target", lambda _args: selected)
+    monkeypatch.setattr(deploy, "_manager", lambda: Manager([]))
+
+    result = deploy.stage(
+        SimpleNamespace(
+            target="hil",
+            component=component_root,
+            status_index=None,
+            _iii_operation_id="iii-hil-stage",
+            _iii_environment={"III_OPERATION_STATE_DIR": str(tmp_path / "operations")},
+        )
+    )
+
+    assert result.outcome.value == "success"
+    assert result.next_actions[0].command[-2:] == ("--target", "hil")
+
+
+def test_px4_release_required_rejection_is_renderable():
+    result = deploy._reject(
+        "iii deploy field",
+        deploy.PX4ReleaseRequiredError("firmware mismatch"),
+        target=target(),
+        release_id=IDENTITY,
+    )
+
+    rendered = json.loads(result.render_json())
+    assert rendered["code"] == "III_PX4_RELEASE_REQUIRED"
+    assert rendered["next_actions"][0]["command"][:4] == [
+        "iii",
+        "px4",
+        "release",
+        "prepare",
+    ]
+
+
 def test_configuration_capture_binds_active_release_identity(monkeypatch):
     class StatusManager:
         def verify_logical_target(self, **_kwargs):
@@ -919,6 +997,136 @@ def test_fake_target_field_flow_is_gc_before_drone_and_never_writes_px4(
     assert "Actual phases: gc-stage=staged" in result.payload["display"]
     record = tmp_path / "operations/iii-fake-field-operation/deployment-actual.json"
     assert json.loads(record.read_text())["phases"][0]["name"] == "gc-stage"
+
+
+def test_field_redeploy_audits_px4_but_skips_activation_when_release_is_active(
+    monkeypatch, tmp_path
+):
+    bundle = tmp_path / "bundle"
+    component(bundle / "drone")
+    impact = _impact("drone")
+    impact["component_reasons"] = {"drone": ["shared"]}
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+    monkeypatch.setattr(deploy, "_manager", lambda: object())
+    monkeypatch.setattr(
+        deploy,
+        "_source_impact",
+        lambda *_args: ({"content_identity": "c" * 64}, impact),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_stage_component",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("already-active release must not be staged again")
+        ),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_remote_status",
+        lambda *_args, **_kwargs: {
+            "live_state": {"active_release_id": IDENTITY}
+        },
+    )
+    audits = []
+    monkeypatch.setattr(
+        deploy,
+        "_px4_activation_evidence",
+        lambda *_args, **_kwargs: audits.append("px4")
+        or px4_activation_evidence(),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_activation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("already-active release must not be activated again")
+        ),
+    )
+
+    result = deploy.field(_field_args(tmp_path, bundle, activate=True))
+
+    assert result.outcome.value == "success", result.findings
+    assert audits == ["px4"]
+    phases = result.payload["actual"]["phases"]
+    assert next(item for item in phases if item["name"] == "px4-validate")[
+        "state"
+    ] == "completed"
+    stage = next(item for item in phases if item["name"] == "drone-stage")
+    assert stage == {
+        "name": "drone-stage",
+        "state": "skipped",
+        "reason": "exact release is already active",
+    }
+    activate = next(item for item in phases if item["name"] == "drone-activate")
+    assert activate == {
+        "name": "drone-activate",
+        "state": "skipped",
+        "reason": "exact release is already active",
+    }
+
+
+def test_paired_redeploy_skips_exact_current_gc_and_drone_work(
+    monkeypatch, tmp_path
+):
+    bundle = tmp_path / "bundle"
+    component(bundle / "drone")
+    component(bundle / "gc")
+
+    class GCStore:
+        def state(self):
+            return {"active_release_id": IDENTITY}
+
+        def release_manifest(self, _release_id):
+            raise AssertionError("current GC release must not be reopened")
+
+        def activate(self, *_args, **_kwargs):
+            raise AssertionError("current GC release must not be reactivated")
+
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+    monkeypatch.setattr(deploy, "_manager", lambda: object())
+    monkeypatch.setattr(
+        deploy,
+        "_source_impact",
+        lambda *_args: ({"content_identity": "c" * 64}, _impact("drone", "gc")),
+    )
+    monkeypatch.setattr(deploy, "_gc_application_store", lambda _args: GCStore())
+    monkeypatch.setattr(
+        deploy,
+        "_install_gc_application",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("current GC release must not be restaged")
+        ),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_stage_component",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("current drone release must not be restaged")
+        ),
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_remote_status",
+        lambda *_args, **_kwargs: {
+            "live_state": {"active_release_id": IDENTITY}
+        },
+    )
+    monkeypatch.setattr(
+        deploy,
+        "_px4_activation_evidence",
+        lambda *_args, **_kwargs: px4_activation_evidence(),
+    )
+
+    result = deploy.field(_field_args(tmp_path, bundle, activate=True))
+
+    assert result.outcome.value == "success", result.findings
+    phases = result.payload["actual"]["phases"]
+    assert [(phase["name"], phase["state"]) for phase in phases] == [
+        ("gc-stage", "skipped"),
+        ("gc-activate", "skipped"),
+        ("drone-stage", "skipped"),
+        ("px4-validate", "completed"),
+        ("drone-activate", "skipped"),
+    ]
 
 
 def _compatibility_manifest(runtime_range: str):
@@ -1082,3 +1290,89 @@ def test_receiver_px4_mismatch_uses_stable_release_required_error(monkeypatch):
         )
     assert observed.value.code == "III_PX4_RELEASE_REQUIRED"
     assert "PX4_COMMIT_MISMATCH" in str(observed.value)
+
+
+def test_receiver_px4_audit_accepts_remote_hil_target(monkeypatch):
+    class Manager:
+        def px4_audit(self, *, release_id, operation_id):
+            assert release_id == IDENTITY
+            assert operation_id == "hil-px4-audit-operation"
+            return {
+                "audit": {"healthy": True, "findings": [], "writes_performed": 0},
+                "activation_evidence": {"healthy": True, "evidence_id": "e" * 64},
+            }
+
+    monkeypatch.setattr(deploy, "_manager", lambda: Manager())
+    args = SimpleNamespace(_iii_operation_id="hil-px4-audit-operation")
+    evidence = deploy._px4_activation_evidence(
+        args,
+        selected={"parameter_profile": "sim", "runtime_profile": "hil"},
+        release_id=IDENTITY,
+    )
+    assert evidence["evidence_id"] == "e" * 64
+
+
+def test_receiver_px4_audit_retries_transient_unreachable_result(monkeypatch):
+    operation_ids = []
+
+    class Manager:
+        def px4_audit(self, *, release_id, operation_id):
+            assert release_id == IDENTITY
+            operation_ids.append(operation_id)
+            if len(operation_ids) == 1:
+                return {
+                    "audit": {
+                        "healthy": False,
+                        "findings": [
+                            {"code": "PX4_UNREACHABLE", "detail": "missed heartbeat"},
+                            {
+                                "code": "PX4_DDS_TOPIC_CONTRACT_UNPROVEN",
+                                "detail": "identity was not observed",
+                            },
+                        ],
+                    },
+                    "activation_evidence": None,
+                }
+            return {
+                "audit": {"healthy": True, "findings": [], "writes_performed": 0},
+                "activation_evidence": {"healthy": True, "evidence_id": "e" * 64},
+            }
+
+    monkeypatch.setattr(deploy, "_manager", lambda: Manager())
+    monkeypatch.setattr(deploy.time, "sleep", lambda _seconds: None)
+    args = SimpleNamespace(_iii_operation_id="field-activation")
+    evidence = deploy._px4_activation_evidence(
+        args,
+        selected={"parameter_profile": "sim", "runtime_profile": "hil"},
+        release_id=IDENTITY,
+    )
+    assert evidence["evidence_id"] == "e" * 64
+    assert operation_ids == ["field-activation", "field-activation-px4-audit-2"]
+
+
+def test_receiver_px4_audit_does_not_retry_deterministic_drift(monkeypatch):
+    calls = 0
+
+    class Manager:
+        def px4_audit(self, *, release_id, operation_id):
+            nonlocal calls
+            calls += 1
+            return {
+                "audit": {
+                    "healthy": False,
+                    "findings": [
+                        {"code": "PX4_COMMIT_MISMATCH", "detail": "wrong commit"}
+                    ],
+                },
+                "activation_evidence": None,
+            }
+
+    monkeypatch.setattr(deploy, "_manager", lambda: Manager())
+    args = SimpleNamespace(_iii_operation_id="field-activation")
+    with pytest.raises(deploy.PX4ReleaseRequiredError):
+        deploy._px4_activation_evidence(
+            args,
+            selected={"parameter_profile": "sim", "runtime_profile": "hil"},
+            release_id=IDENTITY,
+        )
+    assert calls == 1

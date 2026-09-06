@@ -80,7 +80,7 @@ def _trusted_field_signers(args: argparse.Namespace) -> dict[str, Any]:
 
     path = getattr(args, "trusted_signers", None) or _environment(args).get(
         "III_RELEASE_TRUSTED_SIGNERS",
-        "/etc/iii-deployment/trusted-signers.json",
+        str(Path.home() / ".config/iii/keys/signing/trusted-signers.json"),
     )
     return load_trusted_signers(
         Path(path),
@@ -314,16 +314,38 @@ def _load_state(path: Path) -> dict[str, Any]:
     return value
 
 
+def _configuration_valid(status: Mapping[str, Any]) -> bool:
+    return bool(
+        status.get("configuration_server_available") is True
+        and status.get("pending_edits") is False
+        and status.get("configuration_divergent") is False
+        and status.get("mirror_state") == "current"
+    )
+
+
+def _cold_restart_clear(status: Mapping[str, Any]) -> bool:
+    """Report restart state independently from offboard mirror durability."""
+
+    return bool(
+        status.get("configuration_server_available") is True
+        and status.get("pending_restart") is False
+    )
+
+
 def _live_observations(
     args: argparse.Namespace, target: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Collect only authenticated facts and fail every unavailable check closed."""
+    from . import gc_application
+    from .runtime_api_client import RuntimeApiClient
     from .ssh_manager import SSHManager
 
     identifier = operation_id()
-    receiver = SSHManager().verify_logical_target(
+    manager = SSHManager()
+    receiver = manager.verify_logical_target(
         profile=str(target["runtime_profile"]), operation_id=identifier
     )
+    runtime_client = RuntimeApiClient.from_env(endpoint=str(target["endpoint"]))
     live = (
         receiver.get("live_state")
         if isinstance(receiver.get("live_state"), dict)
@@ -332,42 +354,230 @@ def _live_observations(
     active = (
         live.get("active_release_id") or receiver.get("active_release_id") or "unknown"
     )
+    runtime_response = runtime_client.command("runtime.status", {})
+    runtime = (
+        runtime_response.get("result", {}).get("daemon", {})
+        if runtime_response.get("accepted") is True
+        and isinstance(runtime_response.get("result"), dict)
+        else {}
+    )
+    nodes = (
+        runtime.get("managed_nodes")
+        if isinstance(runtime.get("managed_nodes"), dict)
+        else {}
+    )
+    processes = (
+        runtime.get("processes") if isinstance(runtime.get("processes"), dict) else {}
+    )
+    services = (
+        runtime.get("services") if isinstance(runtime.get("services"), dict) else {}
+    )
+
+    mission_response = runtime_client.command("mission.catalog.status", {})
+    mission_result = (
+        mission_response.get("result", {})
+        if mission_response.get("accepted") is True
+        and isinstance(mission_response.get("result"), dict)
+        else {}
+    )
+    mission = (
+        mission_result.get("status")
+        if isinstance(mission_result.get("status"), dict)
+        else {}
+    )
+    specification = (
+        mission.get("specification")
+        if isinstance(mission.get("specification"), dict)
+        else {}
+    )
+    preflight = (
+        mission.get("preflight") if isinstance(mission.get("preflight"), dict) else {}
+    )
+    preflight_items = {
+        item.get("key"): item.get("passed") is True
+        for item in preflight.get("items", [])
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    }
+
+    configuration = runtime_client.configuration_state()
+    config_manifest = (
+        configuration.get("manifest")
+        if isinstance(configuration.get("manifest"), dict)
+        else {}
+    )
+    config_status = (
+        config_manifest.get("status")
+        if isinstance(config_manifest.get("status"), dict)
+        else {}
+    )
+
+    gc_environment = dict(_environment(args))
+    trusted_signers = (
+        getattr(args, "trusted_signers", None)
+        or gc_environment.get("III_RELEASE_TRUSTED_SIGNERS")
+        or Path.home() / ".config/iii/keys/signing/trusted-signers.json"
+    )
+    gc_environment["III_GC_TRUSTED_SIGNERS"] = str(
+        Path(trusted_signers).expanduser().resolve()
+    )
+    gc_store = gc_application._store(
+        argparse.Namespace(_iii_environment=gc_environment), create_roots=False
+    )
+    gc_state = gc_store.state()
+    gc_release = gc_state.get("active_release_id") or "unknown"
+    qgc_settings_match = False
+    if isinstance(gc_release, str) and len(gc_release) == 64:
+        slot = gc_store._verified_release_slot(gc_release)
+        qgc_settings_match = gc_store._qgc_configuration_store(
+            slot
+        ).managed_settings_match()
+
+    active_manifest = receiver.get("active_release_manifest")
+    active_manifest = active_manifest if isinstance(active_manifest, dict) else {}
+    selected_profile = next(
+        (
+            profile
+            for profile in active_manifest.get("profiles", [])
+            if isinstance(profile, dict)
+            and profile.get("id") == target["runtime_profile"]
+        ),
+        {},
+    )
+    health = (
+        selected_profile.get("health")
+        if isinstance(selected_profile.get("health"), dict)
+        else {}
+    )
+    required_nodes = (
+        health.get("required_managed_nodes")
+        if isinstance(health.get("required_managed_nodes"), dict)
+        else None
+    )
+    required_services = (
+        health.get("required_services")
+        if isinstance(health.get("required_services"), list)
+        else None
+    )
+    required_hardware = (
+        health.get("required_hardware_roles")
+        if isinstance(health.get("required_hardware_roles"), list)
+        else None
+    )
+    runtime_healthy = bool(
+        runtime.get("booted") is True
+        and runtime.get("profile") == target["runtime_profile"]
+        and nodes
+        and all(state == "active" for state in nodes.values())
+        and all(
+            isinstance(process, dict)
+            and process.get("alive") is True
+            and process.get("recovery_in_progress") is False
+            for process in processes.values()
+        )
+        and all(
+            isinstance(service, dict)
+            and service.get("alive") is True
+            and service.get("ready") is True
+            for service in services.values()
+        )
+    )
+    profile_health_ready = bool(
+        required_nodes is not None
+        and required_services is not None
+        and required_hardware is not None
+        and all(
+            nodes.get(name) == expected for name, expected in required_nodes.items()
+        )
+        and all(
+            isinstance(services.get(name), dict)
+            and services[name].get("alive") is True
+            and services[name].get("ready") is True
+            for name in required_services
+        )
+    )
+
+    px4 = manager.px4_audit(release_id=active, operation_id=operation_id())
+    audit = px4.get("audit") if isinstance(px4.get("audit"), dict) else {}
+    evidence = (
+        px4.get("activation_evidence")
+        if isinstance(px4.get("activation_evidence"), dict)
+        else {}
+    )
+    comparison = (
+        evidence.get("comparison")
+        if isinstance(evidence.get("comparison"), dict)
+        else {}
+    )
+    px4_findings = (
+        audit.get("findings") if isinstance(audit.get("findings"), list) else []
+    )
+    px4_codes = {
+        item.get("code")
+        for item in px4_findings
+        if isinstance(item, dict) and isinstance(item.get("code"), str)
+    }
+
+    clock = receiver.get("clock") if isinstance(receiver.get("clock"), dict) else {}
+    recovery = (
+        receiver.get("recovery") if isinstance(receiver.get("recovery"), dict) else {}
+    )
+    portable_backup = (
+        receiver.get("portable_backup")
+        if isinstance(receiver.get("portable_backup"), dict)
+        else {}
+    )
+    configuration_valid = _configuration_valid(config_status)
+    storage_ready = preflight_items.get("storage") is True
     return {
         "boot_id": receiver.get("boot_id") or "unknown",
         "drone_release_id": active,
-        "gc_release_id": _environment(args).get("III_GC_RELEASE_ID", "unknown"),
+        "gc_release_id": gc_release,
         "profile": target["runtime_profile"],
         "configuration_hash": live.get("configuration_hash", "unknown"),
         "commissioning_hash": live.get("commissioning_hash", "unknown"),
-        "px4_required_state_hash": receiver.get("px4_required_state_hash", "unknown"),
-        "mission_id": receiver.get("selected_mission_id", "unknown"),
+        "px4_required_state_hash": audit.get("parameter_manifest_id", "unknown"),
+        "mission_id": specification.get("catalog_id", "unknown"),
         "qgc_pair_id": _environment(args).get("III_QGC_PAIR_ID", "unknown"),
         "receiver_available": True,
-        # Explicit authenticated booleans are accepted; absence never becomes PASS.
-        **{
-            name: receiver.get(name, False)
-            for name in (
-                "commissioning_valid",
-                "release_pair_compatible",
-                "clock_gate_valid",
-                "control_plane_available",
-                "required_hardware_ready",
-                "px4_firmware_matches",
-                "px4_required_parameters_match",
-                "parameter_reconciliation_complete",
-                "selected_mission_valid",
-                "storage_reserve_valid",
-                "credentials_valid",
-                "runtime_healthy",
-                "cold_restart_clear",
-                "qgc_managed_settings_match",
-                "optional_hardware_ready",
-                "backup_fresh",
-                "external_archive_recent",
-                "offline_cache_fresh",
-                "logging_capacity_ready",
-            )
-        },
+        "commissioning_valid": bool(
+            recovery.get("flight_capable") is True
+            and recovery.get("recovery_only") is False
+            and selected_profile.get("status") == "commissioned"
+        ),
+        "release_pair_compatible": active == gc_release,
+        "clock_gate_valid": clock.get("gate") == "OPERATIONAL"
+        and clock.get("fault") is None,
+        "control_plane_available": runtime_response.get("accepted") is True,
+        "required_hardware_ready": profile_health_ready and not required_hardware,
+        "px4_firmware_matches": bool(
+            isinstance(audit.get("status"), dict)
+            and audit["status"].get("connected") is True
+            and not any("FIRMWARE" in code for code in px4_codes)
+        ),
+        "px4_required_parameters_match": bool(
+            comparison.get("required_match") is True
+            and comparison.get("inventory_complete") is True
+            and evidence.get("profile") == selected_profile.get("parameter_profile")
+        ),
+        "parameter_reconciliation_complete": configuration_valid,
+        "selected_mission_valid": bool(
+            specification.get("catalog_ready") is True
+            and specification.get("active_profile") == target["runtime_profile"]
+            and mission.get("required_modes_registered") is True
+        ),
+        "storage_reserve_valid": storage_ready,
+        "credentials_valid": True,
+        "runtime_healthy": runtime_healthy and profile_health_ready,
+        "cold_restart_clear": _cold_restart_clear(config_status),
+        "qgc_managed_settings_match": qgc_settings_match,
+        "optional_hardware_ready": bool(
+            isinstance(health.get("optional_hardware_roles"), list)
+            and not health.get("optional_hardware_roles")
+        ),
+        "backup_fresh": portable_backup.get("backup_fresh") is True,
+        "external_archive_recent": False,
+        "offline_cache_fresh": False,
+        "logging_capacity_ready": storage_ready,
     }
 
 
@@ -379,10 +589,8 @@ def check(args: argparse.Namespace) -> CommandResult:
     selected = None
     try:
         selected = _target(args)
-        if selected["selector"] != "real":
-            raise ValueError(
-                "connected field readiness is bound to the real aircraft target"
-            )
+        if selected["selector"] not in {"real", "hil"}:
+            raise ValueError("connected field readiness is bound to an aircraft target")
         policy = json.loads(
             (_workspace() / "deployment/operational-policy.json").read_text(
                 encoding="utf-8"
@@ -548,7 +756,9 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     check_parser = subparsers.add_parser(
         "check", help="seal a read-only connected-system readiness record"
     )
-    check_parser.add_argument("--target", choices=("sim", "real"), default="real")
+    check_parser.add_argument(
+        "--target", choices=("sim", "real", "hil"), default="real"
+    )
     check_parser.add_argument(
         "--state",
         type=Path,

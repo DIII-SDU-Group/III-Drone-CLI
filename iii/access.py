@@ -12,6 +12,7 @@ import tempfile
 import time
 from typing import Any, Mapping
 
+from .operation import OperationStore, default_state_root
 from .result import CommandResult, Finding, NextAction, Outcome
 
 
@@ -37,6 +38,24 @@ def _manager(args: argparse.Namespace):
     from .ssh_manager import SSHManager
 
     return SSHManager(environment=_environment(args))
+
+
+def _retained_preflight(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Return the immutable preflight when an operation is being resumed.
+
+    Receiver plans contain a short-lived, single-use nonce.  Asking the receiver
+    to plan again while applying an already retained operation changes that nonce
+    and makes the CLI reject its own exact plan before the receiver can validate
+    it.  Access operations must therefore follow the same retained-plan rule as
+    the other mutating command providers.
+    """
+
+    identifier = getattr(args, "_iii_operation_id", None)
+    if not identifier:
+        return None
+    plan = OperationStore(default_state_root(_environment(args))).load_plan(identifier)
+    value = plan and plan.get("preflight")
+    return dict(value) if isinstance(value, Mapping) else None
 
 
 def _request(
@@ -99,6 +118,9 @@ def _passphrase(args: argparse.Namespace) -> bytes:
 
 
 def prepare_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    retained = _retained_preflight(args)
+    if retained is not None:
+        return retained
     root = args.directory.expanduser().resolve(strict=False)
     if root.exists() or root.is_symlink():
         raise ValueError("machine credential directory must be new")
@@ -240,7 +262,7 @@ def _target(args: argparse.Namespace) -> dict[str, str]:
         selected["endpoint"] != "iii.local"
         or selected["execution_host"] != "aircraft"
         or selected["logical_id"] != "drone"
-        or selected["runtime_profile"] not in {"real", "opti_track"}
+        or selected["runtime_profile"] not in {"real", "opti_track", "hil"}
     ):
         raise ValueError(
             "access management requires the governed shared aircraft target"
@@ -287,6 +309,9 @@ def _await_operation(
 
 
 def enroll_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    retained = _retained_preflight(args)
+    if retained is not None:
+        return retained
     manager = _manager(args)
     identifier = getattr(args, "_iii_operation_id", None)
     if not identifier:
@@ -373,6 +398,9 @@ def list_access(args: argparse.Namespace) -> CommandResult:
 
 
 def revoke_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    retained = _retained_preflight(args)
+    if retained is not None:
+        return retained
     manager = _manager(args)
     identifier = getattr(args, "_iii_operation_id", None)
     if not identifier:
@@ -466,7 +494,7 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         )
         phase_parser.add_argument("--enrollment", type=Path, required=True)
         phase_parser.add_argument(
-            "--target", choices=("real", "opti_track"), default="real"
+            "--target", choices=("real", "opti_track", "hil"), default="real"
         )
         phase_parser.set_defaults(
             func=enroll,
@@ -478,7 +506,7 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     list_parser = commands.add_parser(
         "list", help="list independent machine authorities"
     )
-    list_parser.add_argument("--target", choices=("real", "opti_track"), default="real")
+    list_parser.add_argument("--target", choices=("real", "opti_track", "hil"), default="real")
     list_parser.set_defaults(func=list_access, _iii_mutating=False)
 
     revoke_parser = commands.add_parser(
@@ -486,7 +514,7 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     )
     revoke_parser.add_argument("--machine-id", required=True)
     revoke_parser.add_argument(
-        "--target", choices=("real", "opti_track"), default="real"
+        "--target", choices=("real", "opti_track", "hil"), default="real"
     )
     revoke_parser.set_defaults(
         func=revoke,
@@ -505,7 +533,7 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     )
     signer_revoke.add_argument("--signer-id", dest="field_signer_id", required=True)
     signer_revoke.add_argument(
-        "--target", choices=("real", "opti_track"), default="real"
+        "--target", choices=("real", "opti_track", "hil"), default="real"
     )
     signer_revoke.set_defaults(
         func=revoke,

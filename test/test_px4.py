@@ -132,6 +132,26 @@ def test_real_pull_uses_receiver_owned_ethernet_snapshot(monkeypatch):
     assert result.code == "III_PX4_PULL"
 
 
+def test_hil_sim_pull_uses_receiver_owned_ethernet_snapshot(monkeypatch):
+    subject = FakeStore()
+    snapshot = {
+        "schema": "iii.px4-parameter-snapshot/v1",
+        "snapshot_id": "c" * 64,
+        "profile": "sim",
+    }
+    subject.retain_snapshot = lambda value: snapshot
+    monkeypatch.setattr(px4, "_store", lambda _args: subject)
+
+    class Manager:
+        def px4_audit(self, *, release_id, operation_id):
+            assert release_id == "a" * 64 and operation_id
+            return {"activation_evidence": {"snapshot": snapshot}}
+
+    monkeypatch.setattr("iii.ssh_manager.SSHManager", Manager)
+    result = px4.pull(SimpleNamespace(profile="sim", release_id="a" * 64))
+    assert result.code == "III_PX4_PULL"
+
+
 def test_release_audit_generates_receiver_correlation_id_without_mutation_controls(
     monkeypatch,
 ):
@@ -188,6 +208,7 @@ def test_all_defaults_selects_complete_non_calibration_manifest_values():
                 "parameters": [
                     {"name": "NAV_ACC_RAD"},
                     {"name": "CAL_ACC0_ID"},
+                    {"name": "COM_MODE0_HASH"},
                 ],
             }
 
@@ -202,4 +223,4 @@ def test_all_defaults_selects_complete_non_calibration_manifest_values():
             }
 
     args = SimpleNamespace(capture_id="c" * 64, all_defaults=True, key=None)
-    assert px4._promotion_keys(Store(), args) == ["NAV_ACC_RAD"]
+    assert px4._promotion_keys(Store(), args) == ["COM_MODE0_HASH", "NAV_ACC_RAD"]

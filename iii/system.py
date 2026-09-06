@@ -304,8 +304,10 @@ def _print_status_result(result: dict) -> None:
     print("\nProcesses:")
     for key, state in sorted(result["processes"].items()):
         alive = "alive" if state["alive"] else "dead"
+        starts = state.get("start_count", state.get("starts", "unknown"))
+        exits = state.get("exit_count", state.get("exits", "unknown"))
         print(
-            f"  {key}: {alive} (starts={state['start_count']}, exits={state['exit_count']})"
+            f"  {key}: {alive} (starts={starts}, exits={exits})"
         )
 
 
@@ -1062,7 +1064,7 @@ def initialize(parser):
     )
     boot_parser.add_argument(
         "--profile",
-        choices=("sim", "real", "opti_track"),
+        choices=("sim", "real", "opti_track", "hil"),
         help="explicit cold runtime profile for this boot only",
     )
 

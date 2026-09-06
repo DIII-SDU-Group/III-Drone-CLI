@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64
 import binascii
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -14,8 +15,9 @@ import select
 import stat
 import struct
 import subprocess
+import tempfile
 import time
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 HOST = "iii.local"
 USER = "iii-deploy"
@@ -132,6 +134,7 @@ class SSHManager:
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         environment = os.environ if environment is None else environment
+        self.environment = dict(environment)
         host = environment.get("III_SSH_HOST", HOST)
         user = environment.get("III_SSH_USER", USER)
         if host != HOST or user != USER:
@@ -164,6 +167,18 @@ class SSHManager:
         self.popen = popen
         self.monotonic = monotonic
         self.endpoint = f"{USER}@{HOST}"
+        configured_control_path = self.environment.get("III_SSH_CONTROL_PATH")
+        self._control_directory: tempfile.TemporaryDirectory[str] | None = None
+        self._persistent_process: subprocess.Popen | None = None
+        if configured_control_path:
+            self.control_path = configured_control_path
+        else:
+            # One CLI process can issue hundreds of small, independently authorised
+            # receiver requests (notably a verified log pull).  Keep the transport
+            # connection private and short-lived while retaining the forced-command
+            # boundary for every request.
+            self._control_directory = tempfile.TemporaryDirectory(prefix="iii-ssh-")
+            self.control_path = str(Path(self._control_directory.name) / "%C")
 
     @property
     def accepted_host_risk(self) -> str:
@@ -256,22 +271,24 @@ class SSHManager:
             "-o",
             "LogLevel=ERROR",
             "-o",
+            "SendEnv=-LANG",
+            "-o",
+            "SendEnv=-LC_*",
+            "-o",
             "ConnectTimeout=10",
             "-i",
             str(self.identity_file),
         ]
-        control_path = os.environ.get("III_SSH_CONTROL_PATH")
-        if control_path:
-            options.extend(
-                [
-                    "-o",
-                    "ControlMaster=auto",
-                    "-o",
-                    f"ControlPath={control_path}",
-                    "-o",
-                    "ControlPersist=no",
-                ]
-            )
+        options.extend(
+            [
+                "-o",
+                "ControlMaster=auto",
+                "-o",
+                f"ControlPath={self.control_path}",
+                "-o",
+                "ControlPersist=5s",
+            ]
+        )
         return options
 
     def _run(
@@ -374,9 +391,39 @@ class SSHManager:
                 "III_SSH_CLIENT_ID_MISMATCH",
                 "receiver request client ID differs from the selected SSH key",
             )
-        response = self._ssh(
-            original_command=None, input_bytes=canonical_json(value) + b"\n"
-        )
+        if self._persistent_process is None:
+            response = self._ssh(
+                original_command=None, input_bytes=canonical_json(value) + b"\n"
+            )
+        else:
+            process = self._persistent_process
+            if process.stdin is None or process.stdout is None:
+                raise SSHAdapterError(
+                    "III_SSH_UNREACHABLE", "persistent receiver pipes are unavailable"
+                )
+            try:
+                process.stdin.write(canonical_json(value) + b"\n")
+                process.stdin.flush()
+                ready, _, _ = select.select([process.stdout], [], [], 30.0)
+                if not ready:
+                    raise SSHAdapterError(
+                        "III_SSH_UNREACHABLE",
+                        "iii.local timed out during a persistent receiver request",
+                    )
+                raw = process.stdout.readline(1024 * 1024 + 2)
+                response = json.loads(raw)
+            except SSHAdapterError:
+                raise
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise SSHAdapterError(
+                    "III_SSH_RESPONSE_INVALID",
+                    "the persistent receiver gateway returned invalid JSON",
+                ) from exc
+            if not isinstance(response, dict) or raw != canonical_json(response) + b"\n":
+                raise SSHAdapterError(
+                    "III_SSH_RESPONSE_INVALID",
+                    "the persistent receiver gateway returned a non-canonical response",
+                )
         if response.get("schema") != "iii.receiver-response/v1":
             raise SSHAdapterError(
                 "III_SSH_RESPONSE_INVALID", "receiver response schema is unsupported"
@@ -393,6 +440,52 @@ class SSHManager:
                 "III_SSH_RESPONSE_INVALID", "receiver result is malformed"
             )
         return result
+
+    @contextmanager
+    def persistent_receiver(self) -> Iterator[None]:
+        """Reuse one restricted gateway process for a sequence of requests."""
+
+        if self._persistent_process is not None:
+            raise SSHAdapterError(
+                "III_SSH_REMOTE_REJECTED", "persistent receiver session is already active"
+            )
+        argv = ["ssh", *self._options(), self.endpoint, "iii-receiver-stream"]
+        process = None
+        clean = False
+        try:
+            process = self.popen(
+                argv,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if process.stdin is None or process.stdout is None:
+                raise SSHAdapterError(
+                    "III_SSH_UNREACHABLE", "persistent receiver pipes are unavailable"
+                )
+            self._persistent_process = process
+            yield
+            process.stdin.close()
+            if process.wait(timeout=30.0) != 0:
+                detail = process.stderr.read() if process.stderr is not None else b""
+                suffix = f": {detail.decode(errors='replace')[-1000:]}" if detail else ""
+                raise SSHAdapterError(
+                    "III_SSH_REMOTE_REJECTED",
+                    "the persistent receiver gateway rejected the operation" + suffix,
+                )
+            clean = True
+        except SSHAdapterError:
+            raise
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SSHAdapterError(
+                "III_SSH_UNREACHABLE",
+                "iii.local did not complete the persistent receiver session",
+            ) from exc
+        finally:
+            self._persistent_process = None
+            if process is not None and not clean and process.poll() is None:
+                process.kill()
+                process.wait()
 
     @staticmethod
     def _receiver_result(response: Mapping[str, Any]) -> dict[str, Any]:

@@ -287,7 +287,10 @@ def parser_result(
 
 
 def _context(
-    args: argparse.Namespace, environment: Mapping[str, str]
+    args: argparse.Namespace,
+    environment: Mapping[str, str],
+    *,
+    command_path: Sequence[str] = (),
 ) -> tuple[str | None, str | None, str | None]:
     target = next(
         (
@@ -297,7 +300,19 @@ def _context(
         ),
         None,
     )
-    profile = getattr(args, "profile", None) or environment.get("III_SYSTEM_PROFILE")
+    explicit_profile = getattr(args, "profile", None)
+    # A remote status/start/stop command acts on the runtime API's current
+    # profile. The local shell's profile is only its workstation default and
+    # may be unrelated (for example, local sim controlling remote HIL). Never
+    # stamp that unrelated value into retained plans or result context.
+    inherit_environment_profile = not (
+        environment.get("CLI_CONFIGURATION") == "remote"
+        and tuple(command_path[:1]) == ("system",)
+        and explicit_profile is None
+    )
+    profile = explicit_profile or (
+        environment.get("III_SYSTEM_PROFILE") if inherit_environment_profile else None
+    )
     release_id = getattr(args, "release_id", None) or getattr(args, "version", None)
     return (
         target,
@@ -562,7 +577,7 @@ def invoke(
     env = os.environ if environment is None else environment
     stdin = sys.stdin if input_stream is None else input_stream
     prompt_stream = sys.stderr if error_stream is None else error_stream
-    target, profile, release_id = _context(args, env)
+    target, profile, release_id = _context(args, env, command_path=spec.path)
     config_failure = _configuration_failure(spec, env)
     if config_failure is not None:
         return config_failure, ""

@@ -113,6 +113,29 @@ def test_inventory_preserves_interrupted_configuration_captures_as_records(
     assert inventory["omitted"] == []
 
 
+def test_archive_preserves_interrupted_configuration_capture_record(tmp_path):
+    root = tmp_path / "registry"
+    partial_name = "a" * 32
+    _json(
+        root / f"captures/.partial/{partial_name}.json",
+        {
+            "schema": "iii.configuration-capture-partial/v1",
+            "partial_id": partial_name,
+            "status": "interrupted",
+        },
+    )
+
+    plan = registry.build_archive_plan(
+        root,
+        destination=tmp_path / "captures.tar",
+        domains=["captures"],
+    )
+
+    assert [record["locator"] for record in plan["archive_manifest"]["records"]] == [
+        f"captures/.partial/{partial_name}.json"
+    ]
+
+
 def test_concurrent_reindex_is_locked_atomic_and_cleans_crash_staging(tmp_path):
     root = tmp_path / "registry"
     _mixed_registry(root)

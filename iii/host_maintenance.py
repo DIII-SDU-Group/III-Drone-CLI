@@ -73,7 +73,7 @@ def _target(args: argparse.Namespace) -> dict[str, str]:
         selected["endpoint"] != "iii.local"
         or selected["execution_host"] != "aircraft"
         or selected["logical_id"] != "drone"
-        or selected["runtime_profile"] not in {"real", "opti_track"}
+        or selected["runtime_profile"] not in {"real", "opti_track", "hil"}
     ):
         raise ValueError("host maintenance requires the shared aircraft target")
     return {
@@ -444,7 +444,7 @@ def _common(parser: argparse.ArgumentParser) -> None:
         ),
         required=True,
     )
-    parser.add_argument("--target", choices=("real", "opti_track"), default="real")
+    parser.add_argument("--target", choices=("real", "opti_track", "hil"), default="real")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--backup-record", type=Path)
     parser.add_argument(
@@ -498,7 +498,7 @@ def initialize(commands: Any) -> None:
     )
     reboot_parser.add_argument("--maintenance-id", required=True)
     reboot_parser.add_argument(
-        "--target", choices=("real", "opti_track"), default="real"
+        "--target", choices=("real", "opti_track", "hil"), default="real"
     )
     reboot_parser.set_defaults(
         func=reboot,
@@ -510,7 +510,7 @@ def initialize(commands: Any) -> None:
         "status", help="inspect retained maintenance and post-boot validation"
     )
     status_parser.add_argument(
-        "--target", choices=("real", "opti_track"), default="real"
+        "--target", choices=("real", "opti_track", "hil"), default="real"
     )
     status_parser.set_defaults(func=status, _iii_mutating=False)
 

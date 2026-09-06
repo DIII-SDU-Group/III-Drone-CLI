@@ -67,7 +67,7 @@ def _target(args: argparse.Namespace) -> dict[str, str]:
         selected["endpoint"] != "iii.local"
         or selected["execution_host"] != "aircraft"
         or selected["logical_id"] != "drone"
-        or selected["runtime_profile"] not in {"real", "opti_track"}
+        or selected["runtime_profile"] not in {"real", "opti_track", "hil"}
     ):
         raise ValueError("transactional networking requires the shared aircraft target")
     return {
@@ -295,7 +295,7 @@ def initialize(commands: Any) -> None:
         "--input", type=Path, required=True, help="Git-ignored owner-only network JSON"
     )
     apply_parser.add_argument(
-        "--target", choices=("real", "opti_track"), default="real"
+        "--target", choices=("real", "opti_track", "hil"), default="real"
     )
     apply_parser.set_defaults(
         func=apply, _iii_mutating=True, _iii_plan_provider=apply_preflight
@@ -306,7 +306,7 @@ def initialize(commands: Any) -> None:
     )
     confirm_parser.add_argument("--network-operation-id", required=True)
     confirm_parser.add_argument(
-        "--target", choices=("real", "opti_track"), default="real"
+        "--target", choices=("real", "opti_track", "hil"), default="real"
     )
     confirm_parser.set_defaults(
         func=confirm, _iii_mutating=True, _iii_plan_provider=confirm_preflight
@@ -317,7 +317,7 @@ def initialize(commands: Any) -> None:
     )
     status_parser.add_argument("--network-operation-id", required=True)
     status_parser.add_argument(
-        "--target", choices=("real", "opti_track"), default="real"
+        "--target", choices=("real", "opti_track", "hil"), default="real"
     )
     status_parser.set_defaults(func=status, _iii_mutating=False)
 

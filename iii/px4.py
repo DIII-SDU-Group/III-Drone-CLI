@@ -126,17 +126,15 @@ def pull(args: argparse.Namespace) -> CommandResult:
     command = "iii px4 params pull"
     try:
         store = _store(args)
-        if args.profile == "real":
-            if not getattr(args, "release_id", None):
-                raise ValueError(
-                    "real PX4 capture requires the exact staged --release-id; "
-                    "the ground-control host must use receiver-owned Ethernet"
-                )
+        release_id = getattr(args, "release_id", None)
+        if release_id:
+            if args.profile not in {"real", "sim"}:
+                raise ValueError("receiver-owned PX4 capture profile is unsupported")
             from .operation import operation_id as new_operation_id
             from .ssh_manager import SSHManager
 
             result = SSHManager().px4_audit(
-                release_id=args.release_id,
+                release_id=release_id,
                 operation_id=getattr(args, "_iii_operation_id", None)
                 or new_operation_id(),
             )
@@ -146,6 +144,12 @@ def pull(args: argparse.Namespace) -> CommandResult:
             ):
                 raise ValueError("receiver did not return a complete PX4 inventory")
             snapshot = store.retain_snapshot(evidence["snapshot"])
+        elif args.profile == "real":
+            if not release_id:
+                raise ValueError(
+                    "real PX4 capture requires the exact staged --release-id; "
+                    "the ground-control host must use receiver-owned Ethernet"
+                )
         else:
             snapshot = store.pull(args.profile)
         comparison = store.compare(args.profile, snapshot["snapshot_id"])
@@ -417,19 +421,29 @@ def promote_preflight(args: argparse.Namespace) -> dict[str, Any]:
     from iii_deployment.contracts import ContractRegistry, content_identity
     from iii_deployment.px4_release import (
         load_dds_contract,
+        sitl_parameter_source_identity,
         validate_release_inputs,
     )
     from iii_deployment.px4_network import load_network_baseline
 
     store = _store(args)
     accepted_keys = _promotion_keys(store, args)
-    promoted = store.promoted_manifest(args.capture_id, accepted_keys=accepted_keys)
+    promoted = store.promoted_manifest(
+        args.capture_id,
+        accepted_keys=accepted_keys,
+        include_unexpected_as_preserved=bool(args.all_defaults),
+    )
     profile = promoted["profile"]
     workspace = _workspace(args)
     if workspace is None:
         raise ValueError("PX4 promotion requires a workspace checkout")
     source = workspace / f"deployment/px4/{profile}.json"
     firmware_source = workspace / "deployment/px4/firmware.json"
+    reference_source = (
+        workspace / "deployment/px4/reference-sitl-snapshot.json"
+        if profile == "sim"
+        else None
+    )
     try:
         source_manifest = json.loads(source.read_bytes())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -443,18 +457,47 @@ def promote_preflight(args: argparse.Namespace) -> dict[str, Any]:
         or branch.startswith("promote/")
     ):
         raise ValueError("PX4 promotion requires a normal feature branch")
-    if _git(args, "status", "--porcelain", "--", str(source), str(firmware_source)):
+    guarded_sources = [str(source), str(firmware_source)]
+    if reference_source is not None:
+        guarded_sources.append(str(reference_source))
+    if _git(args, "status", "--porcelain", "--", *guarded_sources):
         raise ValueError("PX4 manifest or firmware contract source is already modified")
     registry = ContractRegistry(_resource_root(args, "schemas"))
     firmware = json.loads(firmware_source.read_text(encoding="utf-8"))
-    firmware["parameter_manifest_id"] = promoted["manifest_id"]
-    firmware["spec_id"] = content_identity(
-        {key: value for key, value in firmware.items() if key != "spec_id"}
-    )
     dds = load_dds_contract(workspace / "deployment/px4/dds-topics.json", registry)
     network = load_network_baseline(
         workspace / "deployment/px4/network-baseline.json",
         schema_root=_resource_root(args, "schemas"),
+    )
+    if profile == "sim" and args.all_defaults:
+        snapshot = store.load_snapshot(store.load_capture(args.capture_id)["snapshot_id"])
+        airframe = (
+            workspace
+            / "PX4-Autopilot/ROMFS/px4fmu_common/init.d-posix/airframes/99999_gz_d4s_dc_drone"
+        )
+        promoted["inventory"]["source_sha256"] = sitl_parameter_source_identity(
+            snapshot,
+            airframe_sha256=hashlib.sha256(airframe.read_bytes()).hexdigest(),
+            network_baseline_id=network["baseline_id"],
+            px4_commit=_git(
+                args,
+                "-C",
+                str(workspace / "PX4-Autopilot"),
+                "rev-parse",
+                "HEAD",
+            ),
+        )
+        promoted["manifest_id"] = content_identity(
+            {key: value for key, value in promoted.items() if key != "manifest_id"}
+        )
+    bound_parameter_manifest_id = (
+        promoted["manifest_id"]
+        if profile == "real"
+        else store.manifest("real")["manifest_id"]
+    )
+    firmware["parameter_manifest_id"] = bound_parameter_manifest_id
+    firmware["spec_id"] = content_identity(
+        {key: value for key, value in firmware.items() if key != "spec_id"}
     )
     registry.validate("px4-firmware-spec", firmware)
     validate_release_inputs(
@@ -473,13 +516,27 @@ def promote_preflight(args: argparse.Namespace) -> dict[str, Any]:
         "all_defaults": bool(args.all_defaults),
         "source": str(source),
         "firmware_source": str(firmware_source),
+        "reference_source": str(reference_source) if reference_source else None,
         "old_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "old_firmware_sha256": hashlib.sha256(firmware_source.read_bytes()).hexdigest(),
+        "old_reference_sha256": (
+            hashlib.sha256(reference_source.read_bytes()).hexdigest()
+            if reference_source is not None
+            else None
+        ),
+        "snapshot_id": store.load_capture(args.capture_id)["snapshot_id"],
         "new_manifest_id": promoted["manifest_id"],
+        "new_inventory_source_sha256": promoted["inventory"]["source_sha256"],
+        "bound_parameter_manifest_id": bound_parameter_manifest_id,
         "new_spec_id": firmware["spec_id"],
         "mutations": [
             f"write reviewed keys to deployment/px4/{profile}.json",
-            "rebind deployment/px4/firmware.json to the promoted manifest",
+            "ensure deployment/px4/firmware.json remains bound to the real manifest",
+            *(
+                ["replace deployment/px4/reference-sitl-snapshot.json with the reviewed complete capture"]
+                if reference_source is not None
+                else []
+            ),
         ],
     }
 
@@ -514,10 +571,11 @@ def _promotion_keys(store: Any, args: argparse.Namespace) -> list[str]:
     snapshot = store.load_snapshot(capture["snapshot_id"])
     present = {item["name"] for item in snapshot["parameters"]}
     return sorted(
-        item["name"]
-        for item in store.manifest(snapshot["profile"])["parameters"]
-        if item["classification"] != "calibration-identity"
-        and item["name"] in present
+        ({item["name"] for item in snapshot["parameters"]} - {
+            item["name"]
+            for item in store.manifest(snapshot["profile"])["parameters"]
+            if item["classification"] == "calibration-identity"
+        })
     )
 
 
@@ -531,12 +589,27 @@ def promote(args: argparse.Namespace) -> CommandResult:
             raise ValueError("PX4 promotion source or Git state changed")
         store = _store(args)
         accepted_keys = _promotion_keys(store, args)
-        promoted = store.promoted_manifest(args.capture_id, accepted_keys=accepted_keys)
+        promoted = store.promoted_manifest(
+            args.capture_id,
+            accepted_keys=accepted_keys,
+            include_unexpected_as_preserved=bool(args.all_defaults),
+        )
+        promoted["inventory"]["source_sha256"] = retained["preflight"][
+            "new_inventory_source_sha256"
+        ]
+        from iii_deployment.contracts import content_identity
+
+        promoted["manifest_id"] = content_identity(
+            {key: value for key, value in promoted.items() if key != "manifest_id"}
+        )
+        if promoted["manifest_id"] != retained["preflight"]["new_manifest_id"]:
+            raise ValueError("PX4 promoted manifest changed after planning")
         _atomic_document(Path(retained["preflight"]["source"]), promoted)
         firmware_path = Path(retained["preflight"]["firmware_source"])
         firmware = json.loads(firmware_path.read_text(encoding="utf-8"))
-        firmware["parameter_manifest_id"] = promoted["manifest_id"]
-        from iii_deployment.contracts import content_identity
+        firmware["parameter_manifest_id"] = retained["preflight"][
+            "bound_parameter_manifest_id"
+        ]
 
         firmware["spec_id"] = content_identity(
             {key: value for key, value in firmware.items() if key != "spec_id"}
@@ -544,6 +617,13 @@ def promote(args: argparse.Namespace) -> CommandResult:
         if firmware["spec_id"] != retained["preflight"]["new_spec_id"]:
             raise ValueError("PX4 firmware binding changed after planning")
         _atomic_document(firmware_path, firmware)
+        reference_source = retained["preflight"].get("reference_source")
+        if reference_source:
+            capture = store.load_capture(args.capture_id)
+            snapshot = store.load_snapshot(capture["snapshot_id"])
+            if snapshot["snapshot_id"] != retained["preflight"]["snapshot_id"]:
+                raise ValueError("PX4 reference snapshot changed after planning")
+            _atomic_document(Path(reference_source), snapshot)
     except Exception as exc:
         return _rejected(command, "III_PX4_PROMOTE_REJECTED", exc)
     return _accepted(
@@ -685,7 +765,7 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     pull_parser.add_argument("--profile", choices=("real", "sim"), required=True)
     pull_parser.add_argument(
         "--release-id",
-        help="exact staged release used for receiver-owned real PX4 Ethernet capture",
+        help="exact staged release used for receiver-owned real or HIL PX4 Ethernet capture",
     )
     pull_parser.set_defaults(func=pull, _iii_mutating=False)
 

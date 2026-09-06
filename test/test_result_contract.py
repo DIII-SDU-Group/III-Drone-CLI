@@ -355,6 +355,33 @@ def test_read_only_command_rejects_operation_controls(monkeypatch, tmp_path):
     assert result.code == "III_OPERATION_NOT_MUTATING"
 
 
+def test_remote_system_context_does_not_claim_local_workstation_profile(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLI_CONFIGURATION", "remote")
+    monkeypatch.setenv("III_SYSTEM_PROFILE", "sim")
+    monkeypatch.setenv("III_OPERATION_STATE_DIR", str(tmp_path))
+    result, _ = invoke(
+        args=argparse.Namespace(func=lambda _args: None),
+        spec=CommandSpec(("system", "status"), mutating=False),
+        argv=["system", "status"],
+        options=UniversalOptions(),
+    )
+    assert result.profile is None
+
+
+def test_remote_system_boot_context_keeps_explicit_requested_profile(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLI_CONFIGURATION", "remote")
+    monkeypatch.setenv("III_SYSTEM_PROFILE", "sim")
+    monkeypatch.setenv("III_OPERATION_STATE_DIR", str(tmp_path))
+    result, _ = invoke(
+        args=argparse.Namespace(func=lambda _args: None, profile="hil"),
+        spec=CommandSpec(("system", "boot"), mutating=True),
+        argv=["system", "boot", "--profile", "hil"],
+        options=UniversalOptions(dry_run=True, operation_id="remote-hil-boot"),
+    )
+    assert result.profile == "hil"
+    assert result.payload["plan"]["context"]["profile"] == "hil"
+
+
 def test_operation_store_files_are_private_and_content_addressed(tmp_path):
     plan = create_plan(
         identifier="iii-storage-test",

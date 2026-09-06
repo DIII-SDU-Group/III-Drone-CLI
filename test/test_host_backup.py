@@ -163,9 +163,11 @@ def test_interrupted_download_cleans_partial_and_verified_chunks_converge(
         def __init__(self, fail: bool) -> None:
             self.client_id = "f" * 64
             self.fail = fail
+            self.lengths: list[int] = []
 
         def receiver_request(self, request):
             offset = request["payload"]["offset"]
+            self.lengths.append(request["payload"]["length"])
             if self.fail and offset:
                 raise RuntimeError("interrupted")
             block = raw[offset : offset + request["payload"]["length"]]
@@ -197,7 +199,9 @@ def test_interrupted_download_cleans_partial_and_verified_chunks_converge(
             pass
         assert not destination.exists()
         assert not list(destination.parent.glob("*.partial*"))
-        host_backup._download(Manager(False), sealed, destination)
+        manager = Manager(False)
+        host_backup._download(manager, sealed, destination)
+        assert max(manager.lengths) <= 512 * 1024
     finally:
         host_backup._request = original_request
     assert destination.read_bytes() == raw
