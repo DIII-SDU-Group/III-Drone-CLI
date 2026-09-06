@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from iii import field, registry, release
 from iii.__main__ import build_parser
 from iii.runner import inventory_parser
@@ -346,7 +348,20 @@ def _runtime_response(command: str):
     }
 
 
-def test_live_hil_observations_use_authenticated_subsystem_facts(monkeypatch):
+@pytest.mark.parametrize(
+    ("catalog_id", "catalog_ready", "expected_mission_id", "expected_valid"),
+    [
+        ("inspection-production", True, "inspection-production", True),
+        (None, False, "unknown", False),
+    ],
+)
+def test_live_hil_observations_use_authenticated_subsystem_facts(
+    monkeypatch,
+    catalog_id,
+    catalog_ready,
+    expected_mission_id,
+    expected_valid,
+):
     import iii.gc_application as gc_module
     import iii.runtime_api_client as runtime_module
     import iii.ssh_manager as ssh_module
@@ -380,7 +395,12 @@ def test_live_hil_observations_use_authenticated_subsystem_facts(monkeypatch):
             return cls()
 
         def command(self, command, _parameters):
-            return _runtime_response(command)
+            response = _runtime_response(command)
+            if command == "mission.catalog.status":
+                specification = response["result"]["status"]["specification"]
+                specification["catalog_id"] = catalog_id
+                specification["catalog_ready"] = catalog_ready
+            return response
 
         def configuration_state(self):
             return {
@@ -441,7 +461,8 @@ def test_live_hil_observations_use_authenticated_subsystem_facts(monkeypatch):
     assert result["px4_firmware_matches"] is True
     assert result["px4_required_parameters_match"] is True
     assert result["parameter_reconciliation_complete"] is True
-    assert result["selected_mission_valid"] is True
+    assert result["mission_id"] == expected_mission_id
+    assert result["selected_mission_valid"] is expected_valid
     assert result["qgc_managed_settings_match"] is True
     assert Runtime.endpoints == ["iii.local"]
     assert gc_environments == [

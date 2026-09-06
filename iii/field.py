@@ -536,7 +536,7 @@ def _live_observations(
         "configuration_hash": live.get("configuration_hash", "unknown"),
         "commissioning_hash": live.get("commissioning_hash", "unknown"),
         "px4_required_state_hash": audit.get("parameter_manifest_id", "unknown"),
-        "mission_id": specification.get("catalog_id", "unknown"),
+        "mission_id": specification.get("catalog_id") or "unknown",
         "qgc_pair_id": _environment(args).get("III_QGC_PAIR_ID", "unknown"),
         "receiver_available": True,
         "commissioning_valid": bool(
