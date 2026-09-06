@@ -90,6 +90,33 @@ def test_remote_status_prints_runtime_api_daemon_status(monkeypatch, capsys):
     assert "node-a: active" in output
 
 
+def test_remote_status_accepts_legacy_fast_snapshot_without_process_counters(
+    monkeypatch, capsys
+):
+    system = _load_remote_system(monkeypatch)
+    fake = _FakeRuntimeClient(
+        command_response={
+            "accepted": True,
+            "result": {
+                "daemon": {
+                    "booted": True,
+                    "profile": "hil",
+                    "managed_nodes": {"node-a": "active"},
+                    "services": {},
+                    "processes": {"node-a": {"alive": True}},
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(system, "_remote_runtime_client", lambda: fake)
+
+    with pytest.raises(SystemExit) as exc_info:
+        system.status(SimpleNamespace(watch=False))
+
+    assert exc_info.value.code == 0
+    assert "node-a: alive (starts=unknown, exits=unknown)" in capsys.readouterr().out
+
+
 def test_remote_mutating_conflict_is_reported_without_shell_forward(monkeypatch, capsys):
     system = _load_remote_system(monkeypatch)
     fake = _FakeRuntimeClient(

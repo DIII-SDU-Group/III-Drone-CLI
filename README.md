@@ -10,7 +10,7 @@ The CLI package provides:
 - subcommands for system control, configuration access, build flows, and deployment flows
 - thin environment-specific wrappers around daemon-backed system actions, the
   runtime API remote-control client, tmux sessions, container helpers, and
-  SSH-based deployment/administration
+  fixed key-only deployment transport
 
 ## Universal Result And Operation Contract
 
@@ -49,8 +49,8 @@ The CLI behavior depends on `CLI_CONFIGURATION`:
 - `host`: forwards many commands into the CLI container or local tmux workflows
 - `container`: runs against the local system daemon inside a containerized environment
 - `dev`: runs against the local system daemon inside the devcontainer
-- `remote`: uses `iii-runtime-api` for runtime-control commands and SSH-driven
-  helpers for deployment, sync, install, and explicit admin workflows
+- `remote`: uses `iii-runtime-api` for runtime-control commands and the key-only
+  `iii-deploy@iii.local` receiver gateway for deployment
 
 ## System Commands
 
@@ -101,7 +101,7 @@ Set these on the operator machine for remote runtime-control commands:
 ```bash
 export CLI_CONFIGURATION=remote
 export III_RUNTIME_API_URL=http://<runtime-host>:8765
-export III_RUNTIME_API_CLI_TOKEN=<remote-cli-token>
+export III_RUNTIME_API_CLI_TOKEN="$(cat "$XDG_CONFIG_HOME/iii/credentials/gc-primary/runtime-api-token")"
 ```
 
 Remote `iii system status`, runtime mutations, entity/service lists, and log
@@ -110,8 +110,116 @@ commands over SSH. Mutating remote CLI commands are rejected while an active
 browser GUI session holds the operator lease; read-only status/list/log
 operations remain available.
 
-SSH remains available for deployment and administration commands such as
-workspace sync, install, and `iii deploy ssh`.
+This environment variable is local process input, not an onboard shared token.
+Each authorized computer has a different token; the aircraft stores only its
+hash. Use `iii access enroll prepare/add/prove`, `iii access list`, and
+`iii access revoke` for staged computer replacement without copying private SSH
+or field-signing keys.
+
+Deployment SSH uses a user-owned Ed25519 identity, disables passwords and agent
+forwarding, accepts the initial lack of server host-key authentication, and
+checks the advertised logical target/profile without claiming physical-host
+authentication. The forced remote gateway accepts canonical receiver requests
+and resumable SFTP into one release-specific incoming partial only. It is not a
+general shell, source synchronization, SCP, or remote-administration surface.
+
+Aircraft network changes use the same retained operation contract:
+
+```bash
+iii host network apply --input .iii/operator-network.json --target real --dry-run
+iii host network confirm --network-operation-id <apply-operation-id> --target real --dry-run
+iii host network status --network-operation-id <apply-operation-id> --target real
+```
+
+The input must be owner-only and Git-ignored. Plans/results redact SSIDs and
+passphrases. Apply always preserves Ethernet DHCP and arms a fixed onboard
+90-second monotonic rollback timer; the separately authenticated confirmation
+commits the candidate profile after reconnection.
+
+## Ground-Control Host Provisioning
+
+From a stock graphical Ubuntu 22.04/24.04 x86_64 installation containing the
+workspace clone, the source wrapper bootstraps a content-addressed, hash-locked
+controller and routes convergence through the canonical operation contract:
+
+```bash
+sudo -v
+tools/III-Drone-CLI/bin/iii gc provision --dry-run --json
+tools/III-Drone-CLI/bin/iii gc provision \
+  --operation-id <retained-operation-id> --confirm --json
+iii gc status --json
+```
+
+Use `--offline --offline-cache <path>` only with a complete authenticated cache
+for the exact Ubuntu platform. Use `--replacement-archive <path>` only on a fresh
+host; the archive is verified and imported before new machine/SSH material is
+created, and no private key or runtime credential is restored. `iii gc
+start/stop/restart/open/status` owns only local frontend, proxy, discovery,
+mirror, clock, and browser behavior. QGroundControl remains exclusively under
+`iii qgc start/stop/restart/status`; signed application slots are managed by
+`iii gc application stage/activate/rollback/reconcile/prune/status`. The complete
+boundary and commissioning limits are in the workspace
+`docs/gc-host-provisioning.md` runbook.
+
+### Durable configuration captures
+
+`iii config capture` is the field/simulation surface for non-destructive tuning
+evidence. `pull` accepts repeated `--snapshot`, `--name`, and `--description`
+arguments in matching order, seals each set under `.iii/captures/`, and never
+loads or selects it on the target. `list`, `show`, `diff`, and `verify` are
+read-only. `export` and `import` use deterministic checksummed archives with
+verified deduplication. `delete` normally requires `--capture-id`; `--force` is
+separate and requires `--confirm-snapshot delete:<exact-snapshot-id>` in addition
+to the universal retained-plan confirmation.
+
+Pull and import keep canonical progress records under `.iii/captures/.partial/`
+until every selected capture is durable. Failures remain visibly `interrupted`,
+and retry resumes through immutable-content deduplication. Export fsyncs an
+adjacent hidden `*.partial` file before atomically publishing the requested name,
+so an interruption cannot leave a final archive that appears complete.
+
+Use `--target real` for `iii.local` and `--target sim` for the local runtime.
+An explicit `III_RUNTIME_API_URL` overrides only the transport locator; the
+runtime's authenticated profile must still match the requested target.
+
+Promotion remains separate from capture. `iii config promotion plan` performs a
+read-only three-way comparison among the recorded field baseline, capture, and
+current tracked default. `apply` requires explicit `--key` entries plus
+`--classification shared-tracked-default`; every unselected difference remains
+capture evidence and deprecated/removed/unknown selections fail closed. Both the
+capture release ID and workspace ancestry must authenticate against the normal
+feature branch.
+
+`apply --commit` writes only the selected real or sim default and its package
+manifest hashes, then creates exact Configuration-submodule and workspace
+gitlink/lock commits. Its result includes the canonical stacked-PR command; it
+does not bypass that script or commit to `develop`, `main`, or `release`.
+
+### Deployment verification
+
+`iii verify deployment --root <workspace>` audits the reviewed Q1-Q132 clause
+baseline, focused-owner coverage, task acceptance/test references, Q121 execution
+categories, and Q131 cutover rows. `--audit-only` validates definitions without
+claiming that unexecuted rows passed. Optional `--report` and `--junit` outputs are
+atomically written and preserve every `not_run`, skipped, warning, and failure.
+
+`--require-level` and `--require-complete` fail closed unless supplied
+`--evidence` records bind one exact candidate, current matrix/policy identities,
+an authorized signature for local target/physical runs, and the hashes of all
+referenced artifacts. See the workspace
+`docs/deployment-verification-matrix.md` runbook for candidate materialization and
+signed local acceptance.
+
+### Offline documentation validation
+
+`iii docs check --root <workspace>` deterministically validates the governed
+document inventory, editable-repository ownership, entrypoints and routers, local
+links and anchors, fenced III commands, forbidden retired terms, canonical
+authorities, exclusion policy, and generated CLI/schema references. It requires
+no network or aircraft and returns the same human/JSON outcome contract as every
+other III command. Regeneration is deliberately separate through the reviewed
+`update_documentation_references.py` and `update_documentation_manifest.py`
+scripts; check mode never rewrites source.
 
 ## Module Map
 
@@ -122,11 +230,18 @@ workspace sync, install, and `iii deploy ssh`.
 - `runtime_api_client.py`: HTTP client for remote `iii-runtime-api` runtime
   control and logs
 - `config.py`: launches or forwards the configuration client
+- `config_capture.py`: immutable tuning capture and portable archive operations
+- `config_promotion.py`: reviewed capture comparison and tracked-default promotion
+- `verification.py`: deployment matrix and authenticated evidence audit surface
+- `docs.py`: governed offline documentation and generated-reference validation
 - `build.py`: container-image, workspace, and cross-compilation build entry points
-- `deploy.py`: remote deployment/install helpers
+- `deploy.py`: retained application deployment and signed receiver A/B update
+  inspection, transfer, plan, acceptance, and status workflows
 - `container_manager.py`: Docker Compose command wrapper used in host mode
 - `tmux_handler.py`: tmux session management
-- `ssh_manager.py`: SSH, SCP, and rsync helpers for remote workflows
+- `ssh_manager.py`: fixed-endpoint receiver requests and content-bound resumable
+  application/receiver-update SFTP transfer through fixed gateway commands
+- `network.py`: redacted plan/apply, onboard confirmation, and rollback status
 
 ## Tests
 
@@ -136,6 +251,9 @@ Tests cover:
 - daemon-client request/response behavior
 - system log selection behavior
 - tmux session materialization
+- fixed-endpoint key-only SSH, logical-target checks, resumable transfer,
+  disconnect recovery, hostile-argument rejection, and the 120-second transfer
+  measurement record
 
 Typical package-only commands:
 

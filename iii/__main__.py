@@ -24,41 +24,128 @@ from .runner import (
 )
 
 
-def _run_config() -> None:
-    import_module("iii.config").run()
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = ResultArgumentParser(prog="iii")
     add_universal_help(parser)
     subparsers = parser.add_subparsers(dest="subcommand")
 
     system = import_module("iii.system")
-    parser_system = subparsers.add_parser("system", help="Commands for system management")
+    parser_system = subparsers.add_parser(
+        "system", help="Commands for system management"
+    )
     system.initialize(parser_system)
 
-    parser_config = subparsers.add_parser("config", help="Launches configuration manager")
-    parser_config.set_defaults(func=lambda _args: _run_config(), action="run")
-
-    build = import_module("iii.build")
-    parser_build = subparsers.add_parser("build", help="Commands for building parts of the system")
-    build.initialize(parser_build)
+    parser_config = subparsers.add_parser(
+        "config", help="Launches configuration manager"
+    )
+    config_commands = parser_config.add_subparsers(dest="config_command")
+    parser_config_sim = config_commands.add_parser(
+        "sim", help="inspect and recover this clone's living simulation configuration"
+    )
+    import_module("iii.config_sim").initialize(parser_config_sim)
+    parser_config_capture = config_commands.add_parser(
+        "capture", help="capture, verify, compare, and transport field tuning evidence"
+    )
+    import_module("iii.config_capture").initialize(parser_config_capture)
+    parser_config_promotion = config_commands.add_parser(
+        "promotion", help="compare and promote reviewed captures into tracked defaults"
+    )
+    import_module("iii.config_promotion").initialize(parser_config_promotion)
 
     deploy = import_module("iii.deploy")
-    parser_deploy = subparsers.add_parser("deploy", help="Commands for deploying parts of the system")
+    parser_deploy = subparsers.add_parser(
+        "deploy", help="Commands for deploying parts of the system"
+    )
     deploy.initialize(parser_deploy)
+
+    release = import_module("iii.release")
+    parser_release = subparsers.add_parser(
+        "release", help="Commands for qualified releases"
+    )
+    release.initialize(parser_release)
+
+    mission = import_module("iii.mission")
+    parser_mission = subparsers.add_parser(
+        "mission", help="Commands for installed mission catalogs"
+    )
+    mission.initialize(parser_mission)
+
+    field = import_module("iii.field")
+    parser_field = subparsers.add_parser(
+        "field", help="Commands for field preparation and readiness"
+    )
+    field.initialize(parser_field)
+
+    verification = import_module("iii.verification")
+    parser_verification = subparsers.add_parser(
+        "verify", help="Commands for governed verification matrices"
+    )
+    verification.initialize(parser_verification)
+
+    docs = import_module("iii.docs")
+    parser_docs = subparsers.add_parser(
+        "docs", help="Commands for governed offline documentation validation"
+    )
+    docs.initialize(parser_docs)
+
+    logs = import_module("iii.logs")
+    parser_logs = subparsers.add_parser(
+        "logs", help="Commands for verified aircraft log lifecycle management"
+    )
+    logs.initialize(parser_logs)
+
+    records = import_module("iii.records")
+    parser_records = subparsers.add_parser(
+        "records", help="Commands for local records and portable archives"
+    )
+    records.initialize(parser_records)
+
+    host = import_module("iii.host")
+    parser_host = subparsers.add_parser(
+        "host", help="Commands for provisioning and maintaining III hosts"
+    )
+    host.initialize(parser_host)
+
+    access = import_module("iii.access")
+    parser_access = subparsers.add_parser(
+        "access", help="Manage independent per-computer access and signing authority"
+    )
+    access.initialize(parser_access)
+
+    gc = import_module("iii.gc")
+    parser_gc = subparsers.add_parser(
+        "gc", help="Provision and operate the ROS-free ground-control host stack"
+    )
+    gc.initialize(parser_gc)
+
+    qgc = import_module("iii.qgc")
+    parser_qgc = subparsers.add_parser(
+        "qgc", help="Operate the independently pinned host QGroundControl"
+    )
+    qgc.initialize(parser_qgc)
+
+    px4 = import_module("iii.px4")
+    parser_px4 = subparsers.add_parser(
+        "px4", help="Inspect and explicitly manage release-owned PX4 parameters"
+    )
+    px4.initialize(parser_px4)
 
     inventory_parser(parser)
     return parser
 
 
-def _subparser(parser: argparse.ArgumentParser, argv: Sequence[str]) -> tuple[argparse.ArgumentParser, tuple[str, ...]]:
+def _subparser(
+    parser: argparse.ArgumentParser, argv: Sequence[str]
+) -> tuple[argparse.ArgumentParser, tuple[str, ...]]:
     current = parser
     path: list[str] = []
     for token in argv:
         selected = None
         for action in current._actions:
-            if isinstance(action, argparse._SubParsersAction) and token in action.choices:
+            if (
+                isinstance(action, argparse._SubParsersAction)
+                and token in action.choices
+            ):
                 selected = action.choices[token]
                 break
         if selected is None:
@@ -87,8 +174,19 @@ def main(
     try:
         options, parser_argv = extract_universal_options(raw_argv)
     except ParserSignal as exc:
-        result = parser_result(argv=raw_argv, help_text="Run 'iii --help' for usage.", error=exc.message)
-        return render(result, output=("json" if "--json" in raw_argv or "--output=json" in raw_argv else "human"), stdout=out, stderr=err)
+        result = parser_result(
+            argv=raw_argv, help_text="Run 'iii --help' for usage.", error=exc.message
+        )
+        return render(
+            result,
+            output=(
+                "json"
+                if "--json" in raw_argv or "--output=json" in raw_argv
+                else "human"
+            ),
+            stdout=out,
+            stderr=err,
+        )
 
     parser = build_parser()
     selected_parser, path = _subparser(parser, parser_argv)
@@ -101,12 +199,25 @@ def main(
     except ParserSignal as exc:
         help_text = parser_stdout.getvalue() or selected_parser.format_help()
         error = None if exc.status == 0 else exc.message
-        result = parser_result(argv=parser_argv, help_text=help_text, error=error, path=path)
-        return render(result, output=options.output, stdout=out, stderr=err, diagnostics=parser_stderr.getvalue())
+        result = parser_result(
+            argv=parser_argv, help_text=help_text, error=error, path=path
+        )
+        return render(
+            result,
+            output=options.output,
+            stdout=out,
+            stderr=err,
+            diagnostics=parser_stderr.getvalue(),
+        )
 
     spec = getattr(args, "_iii_command_spec", None)
     if spec is None:
-        result = parser_result(argv=parser_argv, help_text=selected_parser.format_help(), error=None, path=path)
+        result = parser_result(
+            argv=parser_argv,
+            help_text=selected_parser.format_help(),
+            error=None,
+            path=path,
+        )
         return render(result, output=options.output, stdout=out, stderr=err)
 
     result, diagnostics = invoke(
@@ -118,7 +229,9 @@ def main(
         input_stream=input_stream,
         error_stream=err,
     )
-    return render(result, output=options.output, stdout=out, stderr=err, diagnostics=diagnostics)
+    return render(
+        result, output=options.output, stdout=out, stderr=err, diagnostics=diagnostics
+    )
 
 
 if __name__ == "__main__":
