@@ -238,6 +238,26 @@ def _field_bundle_release(
     return selected_release
 
 
+def _prevalidate_explicit_field_components(args: argparse.Namespace) -> Path:
+    """Reject an unavailable explicit bundle before inspecting workspace Git.
+
+    The complete release/source/mission binding still happens after source-impact
+    calculation.  This first pass keeps a direct bundle input error deterministic
+    even when the surrounding checkout has an unrelated Git ownership problem.
+    """
+
+    bundle_root = args.bundle_set.resolve()
+    components = set(args.component)
+    if "both" in components:
+        components.remove("both")
+        components.update({"drone", "gc"})
+    if args.include_mission:
+        components.add("drone")
+    for name in sorted(components):
+        _component(bundle_root / name)
+    return bundle_root
+
+
 def _impact_display(
     impact: Mapping[str, Any], actual: Mapping[str, Any] | None = None
 ) -> str:
@@ -351,12 +371,15 @@ def plan(args: argparse.Namespace) -> CommandResult:
     try:
         selected = _target(args)
         _require_remote(selected)
+        bundle_root = (
+            _prevalidate_explicit_field_components(args) if args.bundle_set else None
+        )
         snapshot, impact = _source_impact(
             _workspace(), args.include_mission, args.exclude_mission, args.component
         )
-        if args.bundle_set:
+        if bundle_root is not None:
             release = _field_bundle_release(
-                args.bundle_set.resolve(),
+                bundle_root,
                 components=impact["components"],
                 source_identity=snapshot["content_identity"],
                 selected_missions=impact["missions"]["selected"],
@@ -1283,11 +1306,11 @@ def _field_preflight(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             "--configuration-checkpoint-id is required when --activate is requested"
         )
+    bundle_root = _prevalidate_explicit_field_components(args)
     root = _workspace()
     snapshot, impact = _source_impact(
         root, args.include_mission, args.exclude_mission, args.component
     )
-    bundle_root = args.bundle_set.resolve()
     release = _field_bundle_release(
         bundle_root,
         components=impact["components"],

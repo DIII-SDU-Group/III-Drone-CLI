@@ -545,6 +545,9 @@ def test_field_preflight_rejects_invalid_component_selection(monkeypatch, tmp_pa
     args.component = ["drone"]
     monkeypatch.setattr(deploy, "_target", lambda _args: target())
     monkeypatch.setattr(
+        deploy, "_prevalidate_explicit_field_components", lambda _args: bundle
+    )
+    monkeypatch.setattr(
         deploy,
         "_source_impact",
         lambda *_args: (_ for _ in ()).throw(
