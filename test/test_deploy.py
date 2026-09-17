@@ -95,6 +95,38 @@ def test_field_bundle_release_binds_source_components_and_missions(tmp_path):
     assert release["release_id"] == IDENTITY
 
 
+def test_status_queries_the_matching_receiver_operation(monkeypatch, tmp_path):
+    operation_id = "iii-hil-activation-0001"
+    observed = {}
+
+    class StatusManager:
+        def verify_logical_target(self, *, profile, operation_id):
+            observed["profile"] = profile
+            observed["operation_id"] = operation_id
+            return {
+                "live_state": {"active_release_id": None},
+                "operation": {"state": "failed", "checkpoint": "failed"},
+            }
+
+    operation_root = tmp_path / "operations" / operation_id
+    operation_root.mkdir(parents=True)
+    canonical(operation_root / "state.json", {"state": "completed"})
+    monkeypatch.setattr(deploy, "_target", lambda _args: target())
+    monkeypatch.setattr(deploy, "_manager", lambda: StatusManager())
+
+    result = deploy.status(
+        SimpleNamespace(
+            target="real",
+            operation=operation_id,
+            _iii_environment={"III_OPERATION_STATE_DIR": str(tmp_path / "operations")},
+        )
+    )
+
+    assert result.code == "III_DEPLOY_STATUS_VERIFIED"
+    assert observed == {"profile": "real", "operation_id": operation_id}
+    assert result.payload["receiver"]["operation"]["state"] == "failed"
+
+
 @pytest.mark.parametrize(
     ("source_identity", "selected_missions", "match"),
     [

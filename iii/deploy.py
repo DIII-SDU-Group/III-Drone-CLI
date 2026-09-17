@@ -323,7 +323,10 @@ def status(args: argparse.Namespace) -> CommandResult:
         _require_remote(selected)
         remote = _manager().verify_logical_target(
             profile=selected["runtime_profile"],
-            operation_id="deploy-status-inspection",
+            # A retained local operation ID names the corresponding receiver
+            # journal.  Query that exact ID so a detached mutation cannot look
+            # successful merely because a generic status probe has no journal.
+            operation_id=args.operation or "deploy-status-inspection",
         )
         local_records = None
         if args.operation:
