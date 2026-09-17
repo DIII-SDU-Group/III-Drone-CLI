@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any, Mapping
@@ -776,7 +777,9 @@ def salvage(args: argparse.Namespace) -> CommandResult:
             "--propagation",
             "private",
             "--",
-            "iii-host-salvage-worker",
+            sys.executable,
+            "-m",
+            "iii_deployment.portable_state",
             "--device",
             args.device,
             "--output-root",

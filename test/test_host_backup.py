@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+import sys
 
 from iii import host_backup
 from iii.__main__ import build_parser
@@ -63,6 +64,75 @@ def test_parser_inventory_covers_backup_and_salvage_leaf_semantics() -> None:
     assert salvage.mutating is True
     assert salvage.interactive is True
     assert salvage.plan_provider is not None
+
+
+def test_salvage_invokes_workspace_module_not_uninstalled_console_helper(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "registry"
+    root.mkdir()
+    archive = tmp_path / "portable-state.tar"
+    archive.write_bytes(b"portable state")
+    record_path = tmp_path / "salvage-record.json"
+    _json(
+        record_path,
+        {
+            "schema": "iii.host-salvage-record/v1",
+            "backup_id": "a" * 64,
+            "salvage_id": "b" * 64,
+            "recorded_at": "2026-09-17T00:00:00Z",
+            "target_state_hash": "c" * 64,
+            "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+            "operator_notice": "recommissioning required",
+        },
+    )
+    command: list[str] = []
+
+    def fake_run(argv, **_kwargs):
+        command[:] = argv
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "record_path": str(record_path),
+                        "archive_path": str(archive),
+                    }
+                ),
+                "stderr": "",
+            },
+        )()
+
+    def fake_store(_root, _archive, _record, *, operation_id):
+        destination = root / "backups" / ("a" * 64)
+        destination.mkdir(parents=True)
+        copied = destination / "portable-state.tar"
+        copied.write_bytes(archive.read_bytes())
+        return {"archive_path": copied, "receipt": {"backup_id": "a" * 64}}
+
+    monkeypatch.setattr(host_backup.subprocess, "run", fake_run)
+    monkeypatch.setattr(host_backup, "_store_external", fake_store)
+    args = argparse.Namespace(
+        registry_root=root,
+        device="/dev/loop-test",
+        _iii_operation_id="salvage-cli-operation",
+        _iii_retained_plan={"preflight": {"schema": "iii.host-salvage-plan/v1"}},
+    )
+    result = host_backup.salvage(args)
+
+    assert result.outcome.value == "warning"
+    assert command[0:7] == [
+        "unshare",
+        "--mount",
+        "--propagation",
+        "private",
+        "--",
+        sys.executable,
+        "-m",
+    ]
+    assert command[7] == "iii_deployment.portable_state"
 
 
 def test_external_store_list_show_verify_export_import_and_duplicate(
