@@ -114,6 +114,7 @@ def test_salvage_invokes_workspace_module_not_uninstalled_console_helper(
 
     monkeypatch.setattr(host_backup.subprocess, "run", fake_run)
     monkeypatch.setattr(host_backup, "_store_external", fake_store)
+    monkeypatch.setattr(host_backup.os, "geteuid", lambda: 1000)
     args = argparse.Namespace(
         registry_root=root,
         device="/dev/loop-test",
@@ -123,7 +124,9 @@ def test_salvage_invokes_workspace_module_not_uninstalled_console_helper(
     result = host_backup.salvage(args)
 
     assert result.outcome.value == "warning"
-    assert command[0:7] == [
+    assert command[0:9] == [
+        "sudo",
+        "-n",
         "unshare",
         "--mount",
         "--propagation",
@@ -132,7 +135,7 @@ def test_salvage_invokes_workspace_module_not_uninstalled_console_helper(
         sys.executable,
         "-m",
     ]
-    assert command[7] == "iii_deployment.portable_state"
+    assert command[9] == "iii_deployment.portable_state"
 
 
 def test_external_store_list_show_verify_export_import_and_duplicate(
