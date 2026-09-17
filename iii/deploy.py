@@ -726,10 +726,11 @@ def _activation(
     operation_id: str,
     selected: Mapping[str, Any],
     release_id: str,
-    checkpoint: str,
+    checkpoint: str | None,
     px4_activation_evidence: Mapping[str, Any],
     qualified: bool = False,
     decisions: Mapping[str, str] | None = None,
+    bootstrap_configuration: bool = False,
 ) -> dict[str, Any]:
     planning_action = "plan-activate" if action == "activate" else "plan-rollback"
     key = "activation" if action == "activate" else "rollback"
@@ -740,6 +741,8 @@ def _activation(
     }
     if action == "activate":
         parameters["explicit_qualified_action"] = qualified
+        if bootstrap_configuration:
+            parameters["bootstrap_configuration"] = True
         if decisions:
             parameters["configuration_reconciliation_decisions"] = dict(decisions)
     planned = _request(
@@ -1119,6 +1122,15 @@ def _activate_or_rollback(args: argparse.Namespace, action: str) -> CommandResul
     try:
         selected = _target(args)
         _require_remote(selected)
+        bootstrap_configuration = bool(
+            action == "activate" and getattr(args, "bootstrap_configuration", False)
+        )
+        if bootstrap_configuration and selected["runtime_profile"] != "hil":
+            raise ValueError("--bootstrap-configuration is allowed only for the HIL target")
+        if bootstrap_configuration == (args.configuration_checkpoint_id is not None):
+            raise ValueError(
+                "provide exactly one of --configuration-checkpoint-id or --bootstrap-configuration"
+            )
         identifier, store = _operation(args)
         px4_evidence = _px4_activation_evidence(
             args,
@@ -1135,6 +1147,7 @@ def _activate_or_rollback(args: argparse.Namespace, action: str) -> CommandResul
             px4_activation_evidence=px4_evidence,
             qualified=getattr(args, "qualified", False),
             decisions=_reconciliation_decisions(getattr(args, "decision", [])),
+            bootstrap_configuration=bootstrap_configuration,
         )
         if actual["receiver_acceptance"] is None:
             path, review = _retain_configuration_review(
@@ -2173,13 +2186,17 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         action_parser.add_argument("release_id")
         action_parser.add_argument(
             "--configuration-checkpoint-id",
-            required=True,
             help=(
                 "current/source checkpoint for activation; paired rollback checkpoint "
                 "for explicit rollback"
             ),
         )
         if name == "activate":
+            action_parser.add_argument(
+                "--bootstrap-configuration",
+                action="store_true",
+                help="create and bind the first immutable configuration checkpoint for HIL only",
+            )
             action_parser.add_argument(
                 "--qualified",
                 action="store_true",
