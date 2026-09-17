@@ -771,10 +771,11 @@ def salvage(args: argparse.Namespace) -> CommandResult:
         if not isinstance(retained, Mapping):
             raise ValueError("an exact retained salvage plan is required")
         identifier = getattr(args, "_iii_operation_id", None)
+        deployment_source = _workspace() / "deployment" / "src"
         command = (
             []
             if os.geteuid() == 0
-            else ["sudo", "-n"]
+            else ["sudo", "-n", "env", f"PYTHONPATH={deployment_source}"]
         ) + [
             "unshare",
             "--mount",
