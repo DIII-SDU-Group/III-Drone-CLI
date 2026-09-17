@@ -138,6 +138,8 @@ def test_salvage_invokes_workspace_module_not_uninstalled_console_helper(
         "-m",
     ]
     assert command[11] == "iii_deployment.portable_state"
+    owner_index = command.index("--output-owner")
+    assert command[owner_index + 1] == f"{host_backup.os.getuid()}:{host_backup.os.getgid()}"
 
 
 def test_external_store_list_show_verify_export_import_and_duplicate(

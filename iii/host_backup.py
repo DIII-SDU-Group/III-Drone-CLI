@@ -772,9 +772,10 @@ def salvage(args: argparse.Namespace) -> CommandResult:
             raise ValueError("an exact retained salvage plan is required")
         identifier = getattr(args, "_iii_operation_id", None)
         deployment_source = _workspace() / "deployment" / "src"
+        elevated = os.geteuid() != 0
         command = (
             []
-            if os.geteuid() == 0
+            if not elevated
             else ["sudo", "-n", "env", f"PYTHONPATH={deployment_source}"]
         ) + [
             "unshare",
@@ -794,6 +795,8 @@ def salvage(args: argparse.Namespace) -> CommandResult:
             "--operation-id",
             identifier,
         ]
+        if elevated:
+            command.extend(["--output-owner", f"{os.getuid()}:{os.getgid()}"])
         result = subprocess.run(command, capture_output=True, check=False, text=True)
         if result.returncode != 0:
             raise ValueError(
