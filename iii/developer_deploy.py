@@ -26,8 +26,64 @@ def _workspace() -> Path:
     raise ValueError("run this command from the III workspace or one of its children")
 
 
+def _dirty_source_components(workspace: Path) -> frozenset[str]:
+    """Return direct ``src`` children with local changes in the workspace.
+
+    A plain developer deployment is intentionally convenient, but it must not
+    send an unrelated local experiment simply because it shares this workspace.
+    Explicit ``--path`` remains the escape hatch for deploying a work-in-
+    progress component on purpose.
+    """
+
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode:
+        # A copied or freshly-created developer workspace may not have Git
+        # metadata.  It remains deployable; there simply are no repository
+        # changes available to exclude automatically.
+        return frozenset()
+
+    dirty: set[str] = set()
+    for line in completed.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        paths = line[3:].split(" -> ")
+        for path in paths:
+            parts = Path(path).parts
+            if len(parts) >= 2 and parts[0] == "src":
+                dirty.add(parts[1])
+    return frozenset(dirty)
+
+
+def _default_source_paths(workspace: Path) -> tuple[Path, ...]:
+    dirty_components = _dirty_source_components(workspace)
+    sources = [workspace / relative for relative in ("setup", "tools", "deployment")]
+    source_root = workspace / "src"
+    sources.extend(
+        component
+        for component in sorted(source_root.iterdir())
+        if component.name not in dirty_components and component.name != ".git"
+    )
+    return tuple(sources)
+
+
 def _source_paths(workspace: Path, requested: Sequence[str]) -> tuple[Path, ...]:
-    raw_paths = tuple(requested) or ("src", "setup", "tools", "deployment")
+    if not requested:
+        return _default_source_paths(workspace)
+
+    raw_paths = tuple(requested)
     resolved: list[Path] = []
     for raw in raw_paths:
         candidate = (workspace / raw).resolve()

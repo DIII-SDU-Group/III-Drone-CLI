@@ -39,6 +39,34 @@ def test_parser_declares_direct_developer_deployment_without_operation_gate():
     assert spec.mutating is False
 
 
+def test_default_deploy_skips_uncommitted_source_components(monkeypatch, tmp_path):
+    workspace = _workspace(tmp_path / "workspace")
+    (workspace / "src/clean_component").mkdir()
+    (workspace / "src/experimental_component").mkdir()
+    monkeypatch.setattr(
+        developer_deploy,
+        "_dirty_source_components",
+        lambda _: frozenset({"experimental_component"}),
+    )
+
+    selected = developer_deploy._source_paths(workspace, [])
+
+    assert selected[:3] == (
+        workspace / "setup",
+        workspace / "tools",
+        workspace / "deployment",
+    )
+    assert workspace / "src/pkg" in selected
+    assert workspace / "src/clean_component" in selected
+    assert workspace / "src/experimental_component" not in selected
+
+
+def test_explicit_path_can_deploy_an_intentional_work_in_progress(tmp_path):
+    workspace = _workspace(tmp_path / "workspace")
+
+    assert developer_deploy._source_paths(workspace, ["src"]) == (workspace / "src",)
+
+
 def test_developer_deploy_dry_run_has_no_remote_side_effect(monkeypatch, tmp_path):
     workspace = _workspace(tmp_path / "workspace")
     receipts = tmp_path / "receipts"

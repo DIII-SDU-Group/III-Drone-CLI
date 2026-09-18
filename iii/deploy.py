@@ -23,7 +23,10 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "--path",
         action="append",
         default=[],
-        help="workspace-relative path to synchronize (repeatable; defaults to src, setup, tools)",
+        help=(
+            "workspace-relative path to synchronize (repeatable; defaults to clean source "
+            "components plus setup, tools, and deployment)"
+        ),
     )
     developer_parser.add_argument(
         "--mirror",

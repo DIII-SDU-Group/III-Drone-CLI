@@ -13,9 +13,12 @@ iii host inspect --host iii.local
 iii px4 inspect --host iii.local
 ```
 
-`iii deploy dev` uses normal SSH and rsync to synchronize `src/`, `setup/`, and
-`tools/` into `/home/iii/ws`. Add `--mirror` only when the remote workspace
-should exactly match local source. `--dry-run` previews a command without
+`iii deploy dev` uses normal SSH and rsync to synchronize the clean direct
+children of `src/`, plus `setup/`, `tools/`, and `deployment/`, into
+`/home/iii/ws`. It leaves unrelated dirty source components local. Use
+`--path src/<component>` to deliberately synchronize a work-in-progress
+component. Add `--mirror` only when the remote workspace should exactly match
+the selected local source. `--dry-run` previews a command without
 connecting or copying.
 
 `iii host image write --image <image> --device /dev/<device>` writes a supplied
