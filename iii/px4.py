@@ -38,6 +38,10 @@ def _px4_traffic_present(output: str, ports: tuple[int, int]) -> bool:
     )
 
 
+def _hil_setpoint_present(output: str) -> bool:
+    return "III_HIL_DDS_SETPOINT_OBSERVED" in output
+
+
 def inspect(args: argparse.Namespace) -> CommandResult:
     target = f"{args.user}@{args.host}"
     profile = args.profile
@@ -51,7 +55,15 @@ def inspect(args: argparse.Namespace) -> CommandResult:
             "ping -c 1 -W 2 10.41.10.2; "
             "ss -Hlun; "
             "sudo -n timeout 4 tcpdump -ni eth0 -c 1 "
-            f"'udp and (port {dds_port} or port {mavlink_port})' 2>&1 || true"
+            f"'udp and (port {dds_port} or port {mavlink_port})' 2>&1 || true; "
+            f"if [ {profile} = hil ]; then "
+            "source /opt/ros/jazzy/setup.bash; "
+            "source /home/iii/ws/install/setup.bash; "
+            "if timeout 5 ros2 topic echo --once "
+            "/fmu/out/vehicle_local_position_setpoint >/dev/null 2>&1; then "
+            "echo III_HIL_DDS_SETPOINT_OBSERVED; "
+            "else echo III_HIL_DDS_SETPOINT_MISSING; fi; "
+            "fi"
         ),
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -70,6 +82,14 @@ def inspect(args: argparse.Namespace) -> CommandResult:
         ("III_PX4_TRAFFIC_MISSING", _px4_traffic_present(completed.stdout, (dds_port, mavlink_port)),
          "no PX4-originated DDS or MAVLink UDP packet was captured on eth0."),
     )
+    if profile == "hil":
+        checks += (
+            (
+                "III_HIL_DDS_SETPOINT_MISSING",
+                _hil_setpoint_present(completed.stdout),
+                "no /fmu/out/vehicle_local_position_setpoint message arrived through DDS.",
+            ),
+        )
     missing = tuple(
         Finding(code, message, severity="warning")
         for code, present, message in checks

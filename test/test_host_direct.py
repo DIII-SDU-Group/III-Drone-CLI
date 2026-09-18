@@ -82,6 +82,7 @@ def test_hil_px4_inspection_requires_hil_ports_and_reports_them(monkeypatch):
 UNCONN 0 0 0.0.0.0:8889 0.0.0.0:*
 UNCONN 0 0 0.0.0.0:14542 0.0.0.0:*
 IP 10.41.10.2.40123 > 10.41.10.1.8889: UDP, length 64
+III_HIL_DDS_SETPOINT_OBSERVED
 """
 
     observed = {}
@@ -97,6 +98,7 @@ IP 10.41.10.2.40123 > 10.41.10.1.8889: UDP, length 64
     assert result.outcome is Outcome.SUCCESS
     assert result.code == "III_PX4_LINK_INSPECTED"
     assert result.payload["expected_ports"] == {"dds": 8889, "mavlink": 14542}
+    assert "ros2 topic echo --once" in observed["command"][2]
     assert "grep" not in observed["command"][2]
 
 
@@ -117,4 +119,28 @@ def test_hil_px4_inspection_reports_missing_hil_listener(monkeypatch):
         "III_PX4_DDS_LISTENER_MISSING",
         "III_PX4_MAVLINK_LISTENER_MISSING",
         "III_PX4_TRAFFIC_MISSING",
+        "III_HIL_DDS_SETPOINT_MISSING",
+    }
+
+
+def test_hil_px4_inspection_requires_the_dds_setpoint_message(monkeypatch):
+    class Completed:
+        returncode = 0
+        stderr = ""
+        stdout = """eth0 UP 10.41.10.1/24
+10.41.10.2 dev eth0 src 10.41.10.1
+1 packets transmitted, 1 received, 0% packet loss
+UNCONN 0 0 0.0.0.0:8889 0.0.0.0:*
+UNCONN 0 0 0.0.0.0:14542 0.0.0.0:*
+IP 10.41.10.2.40123 > 10.41.10.1.8889: UDP, length 64
+III_HIL_DDS_SETPOINT_MISSING
+"""
+
+    monkeypatch.setattr(px4.subprocess, "run", lambda *_args, **_kwargs: Completed())
+
+    result = px4.inspect(SimpleNamespace(host="10.42.0.15", user="iii", profile="hil"))
+
+    assert result.outcome is Outcome.WARNING
+    assert {finding.code for finding in result.findings} == {
+        "III_HIL_DDS_SETPOINT_MISSING"
     }
