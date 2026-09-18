@@ -219,39 +219,12 @@ def test_every_existing_parser_leaf_is_inventory_covered():
         "system",
         "deploy",
         "config",
-        "release",
         "mission",
-        "field",
-        "verify",
-        "docs",
-        "logs",
-        "records",
         "host",
-        "access",
-        "gc",
-        "qgc",
         "px4",
     }
     # Future providers must select from this declared universal contract surface.
-    assert {
-        "system",
-        "build",
-        "deploy",
-        "release",
-        "host",
-        "gc",
-        "qgc",
-        "px4",
-        "mission",
-        "config",
-        "capture",
-        "logs",
-        "records",
-        "governance",
-        "field",
-        "documentation",
-        "access",
-    } == REQUIRED_COMMAND_FAMILIES
+    assert {"system", "deploy", "host", "px4", "mission", "config"} == REQUIRED_COMMAND_FAMILIES
 
 
 def test_operation_registry_serializes_concurrent_atomic_record_writes(tmp_path):

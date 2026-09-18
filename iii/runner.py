@@ -27,22 +27,11 @@ from .result import CommandResult, Finding, NextAction, Outcome, internal_error_
 SUPPORTED_CONFIGURATIONS = {"host", "container", "remote", "dev"}
 REQUIRED_COMMAND_FAMILIES = {
     "system",
-    "build",
     "deploy",
-    "release",
     "host",
-    "gc",
-    "qgc",
     "px4",
     "mission",
     "config",
-    "capture",
-    "logs",
-    "records",
-    "governance",
-    "field",
-    "documentation",
-    "access",
 }
 
 
@@ -86,6 +75,7 @@ class UniversalOptions:
 class CommandSpec:
     path: tuple[str, ...]
     mutating: bool
+    direct_mutation: bool = False
     interactive: bool = False
     plan_provider: Callable[[argparse.Namespace], Mapping[str, Any]] | None = None
     operation_finalizer: Callable[[argparse.Namespace], None] | None = None
@@ -154,7 +144,7 @@ def extract_universal_options(
 
 
 def add_universal_help(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_argument_group("universal result and operation controls")
+    group = parser.add_argument_group("universal output controls")
     group.add_argument(
         "--output",
         choices=("human", "json"),
@@ -169,18 +159,7 @@ def add_universal_help(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--dry-run",
         action="store_true",
-        help="retain and render an exact operation plan without mutation",
-    )
-    group.add_argument(
-        "--operation-id", metavar="ID", help="bind or resume durable operation state"
-    )
-    group.add_argument(
-        "--resume", action="store_true", help="resume the exact retained operation plan"
-    )
-    group.add_argument(
-        "--confirm",
-        action="store_true",
-        help="confirm the exact mutating operation plan",
+        help="preview a command without making its external changes",
     )
 
 
@@ -235,6 +214,7 @@ def inventory_parser(
             spec = CommandSpec(
                 prefix,
                 bool(current._defaults.get("_iii_mutating", _is_mutating(prefix))),
+                bool(current._defaults.get("_iii_direct_mutation", False)),
                 bool(
                     current._defaults.get("_iii_interactive", _is_interactive(prefix))
                 ),
@@ -362,6 +342,8 @@ def _configuration_failure(
     spec: CommandSpec, environment: Mapping[str, str]
 ) -> CommandResult | None:
     if not spec.path or spec.path[0] not in {"system", "build", "deploy", "config"}:
+        return None
+    if spec.direct_mutation:
         return None
     configuration = environment.get("CLI_CONFIGURATION")
     if configuration in SUPPORTED_CONFIGURATIONS:
@@ -590,7 +572,27 @@ def invoke(
     plan: dict[str, Any] | None = None
     state: dict[str, Any] | None = None
     try:
-        if spec.mutating:
+        if spec.direct_mutation:
+            if options.resume or options.operation_id is not None:
+                return (
+                    CommandResult(
+                        command=spec.identity,
+                        outcome=Outcome.USAGE_ERROR,
+                        summary="Direct developer deployment does not retain operations.",
+                        code="III_DEVELOPER_DEPLOY_OPERATION_UNSUPPORTED",
+                        findings=(
+                            Finding(
+                                "III_DEVELOPER_DEPLOY_OPERATION_UNSUPPORTED",
+                                "remove --operation-id and --resume",
+                                field="argv",
+                            ),
+                        ),
+                        next_actions=(_help_action(spec.path),),
+                    ),
+                    "",
+                )
+            setattr(args, "_iii_dry_run", options.dry_run)
+        elif spec.mutating:
             identifier = identifier or new_operation_id()
             setattr(args, "_iii_operation_id", identifier)
             try:

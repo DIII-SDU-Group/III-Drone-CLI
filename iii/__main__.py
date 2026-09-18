@@ -43,14 +43,6 @@ def build_parser() -> argparse.ArgumentParser:
         "sim", help="inspect and recover this clone's living simulation configuration"
     )
     import_module("iii.config_sim").initialize(parser_config_sim)
-    parser_config_capture = config_commands.add_parser(
-        "capture", help="capture, verify, compare, and transport field tuning evidence"
-    )
-    import_module("iii.config_capture").initialize(parser_config_capture)
-    parser_config_promotion = config_commands.add_parser(
-        "promotion", help="compare and promote reviewed captures into tracked defaults"
-    )
-    import_module("iii.config_promotion").initialize(parser_config_promotion)
 
     deploy = import_module("iii.deploy")
     parser_deploy = subparsers.add_parser(
@@ -58,47 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     deploy.initialize(parser_deploy)
 
-    release = import_module("iii.release")
-    parser_release = subparsers.add_parser(
-        "release", help="Commands for qualified releases"
-    )
-    release.initialize(parser_release)
-
     mission = import_module("iii.mission")
     parser_mission = subparsers.add_parser(
         "mission", help="Commands for installed mission catalogs"
     )
     mission.initialize(parser_mission)
-
-    field = import_module("iii.field")
-    parser_field = subparsers.add_parser(
-        "field", help="Commands for field preparation and readiness"
-    )
-    field.initialize(parser_field)
-
-    verification = import_module("iii.verification")
-    parser_verification = subparsers.add_parser(
-        "verify", help="Commands for governed verification matrices"
-    )
-    verification.initialize(parser_verification)
-
-    docs = import_module("iii.docs")
-    parser_docs = subparsers.add_parser(
-        "docs", help="Commands for governed offline documentation validation"
-    )
-    docs.initialize(parser_docs)
-
-    logs = import_module("iii.logs")
-    parser_logs = subparsers.add_parser(
-        "logs", help="Commands for verified aircraft log lifecycle management"
-    )
-    logs.initialize(parser_logs)
-
-    records = import_module("iii.records")
-    parser_records = subparsers.add_parser(
-        "records", help="Commands for local records and portable archives"
-    )
-    records.initialize(parser_records)
 
     host = import_module("iii.host")
     parser_host = subparsers.add_parser(
@@ -106,27 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     host.initialize(parser_host)
 
-    access = import_module("iii.access")
-    parser_access = subparsers.add_parser(
-        "access", help="Manage independent per-computer access and signing authority"
-    )
-    access.initialize(parser_access)
-
-    gc = import_module("iii.gc")
-    parser_gc = subparsers.add_parser(
-        "gc", help="Provision and operate the ROS-free ground-control host stack"
-    )
-    gc.initialize(parser_gc)
-
-    qgc = import_module("iii.qgc")
-    parser_qgc = subparsers.add_parser(
-        "qgc", help="Operate the independently pinned host QGroundControl"
-    )
-    qgc.initialize(parser_qgc)
-
     px4 = import_module("iii.px4")
     parser_px4 = subparsers.add_parser(
-        "px4", help="Inspect and explicitly manage release-owned PX4 parameters"
+        "px4", help="Inspect the Pi-side PX4 network link"
     )
     px4.initialize(parser_px4)
 
