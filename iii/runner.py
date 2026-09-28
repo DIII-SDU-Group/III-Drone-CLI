@@ -32,6 +32,8 @@ REQUIRED_COMMAND_FAMILIES = {
     "px4",
     "mission",
     "config",
+    "api",
+    "rosbag",
 }
 
 

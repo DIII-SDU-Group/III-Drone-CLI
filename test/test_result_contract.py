@@ -222,9 +222,21 @@ def test_every_existing_parser_leaf_is_inventory_covered():
         "mission",
         "host",
         "px4",
+        "qgc",
+        "api",
+        "rosbag",
     }
     # Future providers must select from this declared universal contract surface.
-    assert {"system", "deploy", "host", "px4", "mission", "config"} == REQUIRED_COMMAND_FAMILIES
+    assert {
+        "system",
+        "deploy",
+        "host",
+        "px4",
+        "mission",
+        "config",
+        "api",
+        "rosbag",
+    } == REQUIRED_COMMAND_FAMILIES
 
 
 def test_operation_registry_serializes_concurrent_atomic_record_writes(tmp_path):
@@ -328,7 +340,9 @@ def test_read_only_command_rejects_operation_controls(monkeypatch, tmp_path):
     assert result.code == "III_OPERATION_NOT_MUTATING"
 
 
-def test_remote_system_context_does_not_claim_local_workstation_profile(monkeypatch, tmp_path):
+def test_remote_system_context_does_not_claim_local_workstation_profile(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("CLI_CONFIGURATION", "remote")
     monkeypatch.setenv("III_SYSTEM_PROFILE", "sim")
     monkeypatch.setenv("III_OPERATION_STATE_DIR", str(tmp_path))
@@ -341,7 +355,9 @@ def test_remote_system_context_does_not_claim_local_workstation_profile(monkeypa
     assert result.profile is None
 
 
-def test_remote_system_boot_context_keeps_explicit_requested_profile(monkeypatch, tmp_path):
+def test_remote_system_boot_context_keeps_explicit_requested_profile(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("CLI_CONFIGURATION", "remote")
     monkeypatch.setenv("III_SYSTEM_PROFILE", "sim")
     monkeypatch.setenv("III_OPERATION_STATE_DIR", str(tmp_path))

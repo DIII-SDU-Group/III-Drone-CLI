@@ -1,34 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$( cd "$( dirname "$SCRIPT_PATH" )" && pwd )"
 CLI_DIR="$(dirname "$SCRIPT_DIR")"
 WORKSPACE_ROOT="$(cd "$CLI_DIR/../.." && pwd)"
 
-help_requested=0
-for argument in "$@"; do
-  if [[ "$argument" == "-h" || "$argument" == "--help" ]]; then
-    help_requested=1
-    break
-  fi
-done
-
-if [[ "$help_requested" == "0" && "${III_GC_CONTROLLER_BOOTSTRAPPED:-0}" != "1" && "${1:-}" == "gc" && "${2:-}" == "provision" ]]; then
-  bootstrap_args=()
-  for ((index=1; index <= $#; index++)); do
-    if [[ "${!index}" == "--offline-cache" ]]; then
-      next=$((index + 1))
-      [[ $next -le $# ]] || { echo "--offline-cache requires a path" >&2; exit 64; }
-      bootstrap_args+=(--offline-cache "${!next}")
-      break
-    fi
-  done
-  exec python3 "$WORKSPACE_ROOT/deployment/scripts/bootstrap_gc_controller.py" "${bootstrap_args[@]}" -- "$@"
-fi
-
 SOURCE_PYTHONPATH="$CLI_DIR"
 for source_root in \
-  "$WORKSPACE_ROOT/deployment/src" \
   "$WORKSPACE_ROOT/src/III-Drone-Contracts" \
   "$WORKSPACE_ROOT/src/III-Drone-Configuration" \
   "$WORKSPACE_ROOT/src/III-Drone-Runtime" \

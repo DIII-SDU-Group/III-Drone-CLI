@@ -25,7 +25,7 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         default=[],
         help=(
             "workspace-relative path to synchronize (repeatable; defaults to clean source "
-            "components plus setup, tools, and deployment)"
+            "components plus setup, scripts, tools, and deployment)"
         ),
     )
     developer_parser.add_argument(
@@ -33,7 +33,14 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="delete remote files absent from each selected local path",
     )
-    developer_parser.add_argument("--build", action="store_true", help="build after synchronization")
+    developer_parser.add_argument(
+        "--build",
+        action="store_true",
+        help=(
+            "cross-build the ARM64 runtime and Micro XRCE-DDS agent on this workstation "
+            "and synchronize the install tree (the Pi is never used as a compiler)"
+        ),
+    )
     developer_parser.add_argument(
         "--restart",
         action="store_true",

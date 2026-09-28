@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from importlib import import_module
 from io import StringIO
 import os
@@ -12,6 +13,7 @@ from typing import Mapping, Sequence, TextIO
 
 import argcomplete
 
+from . import runtime_routing
 from .runner import (
     ParserSignal,
     ResultArgumentParser,
@@ -62,12 +64,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     host.initialize(parser_host)
 
+    qgc = import_module("iii.qgc")
+    parser_qgc = subparsers.add_parser(
+        "qgc", help="Manage the pinned host QGroundControl user service"
+    )
+    qgc.initialize(parser_qgc)
+
+    api = import_module("iii.api")
+    parser_api = subparsers.add_parser(
+        "api", help="Manage the local III Runtime API system service"
+    )
+    api.initialize(parser_api)
+
+    rosbag = import_module("iii.rosbag")
+    parser_rosbag = subparsers.add_parser(
+        "rosbag", help="Manage ROS bag recordings on the selected runtime"
+    )
+    rosbag.initialize(parser_rosbag)
+
     px4 = import_module("iii.px4")
     parser_px4 = subparsers.add_parser(
         "px4", help="Inspect the Pi-side PX4 network link"
     )
     px4.initialize(parser_px4)
 
+    runtime_routing.add_target_arguments(parser)
     inventory_parser(parser)
     return parser
 
@@ -158,12 +179,107 @@ def main(
         )
         return render(result, output=options.output, stdout=out, stderr=err)
 
+    # The parser's command spec is authoritative.  A root option with a value
+    # (for example ``--runtime-target sim``) can precede the command, where
+    # the lightweight help-path scanner cannot identify its subparser.
+    path = spec.path
+
+    runtime_host = getattr(args, "runtime_host", None)
+    if runtime_host is not None:
+        if not runtime_routing.is_runtime_path(path):
+            result = parser_result(
+                argv=parser_argv,
+                help_text=selected_parser.format_help(),
+                error="--host selects a runtime only for system, api, config, and rosbag commands.",
+                path=path,
+            )
+            return render(result, output=options.output, stdout=out, stderr=err)
+        try:
+            env = runtime_routing.with_runtime_host(env, runtime_host)
+        except runtime_routing.RuntimeRoutingError as exc:
+            result = runtime_routing.rejection(path, exc)
+            return render(result, output=options.output, stdout=out, stderr=err)
+
+    if (
+        path == ("api", "logs")
+        and getattr(args, "follow", False)
+        and options.output == "json"
+    ):
+        result = parser_result(
+            argv=parser_argv,
+            help_text=selected_parser.format_help(),
+            error="iii api logs --follow streams live output and cannot use --json.",
+            path=path,
+        )
+        return render(result, output=options.output, stdout=out, stderr=err)
+
+    try:
+        route = runtime_routing.prepare_route(path, args, env)
+    except runtime_routing.RuntimeRoutingError as exc:
+        result = runtime_routing.rejection(path, exc)
+        return render(result, output=options.output, stdout=out, stderr=err)
+
+    invoke_environment = env
+    if route is not None:
+        args.target = route.target_host
+        if getattr(args, "profile", None) is None:
+            args.profile = route.target
+
+        interactive = tuple(path) == ("system", "attach") or (
+            tuple(path) == ("api", "logs") and bool(getattr(args, "follow", False))
+        )
+        if interactive:
+            tty = bool(getattr(input_stream, "isatty", lambda: False)())
+            return route.execute(
+                parser_argv,
+                output=options.output,
+                mutating=spec.mutating,
+                tty=tty,
+                stream=tuple(path) == ("api", "logs"),
+                stdout_stream=out,
+                stderr_stream=err,
+                stdin_stream=input_stream,
+            )
+
+        original_spec = spec
+        spec = replace(
+            original_spec,
+            plan_provider=(
+                runtime_routing.add_route_preflight(route)
+                if original_spec.mutating
+                else None
+            ),
+        )
+        setattr(args, "_iii_command_spec", spec)
+        setattr(
+            args,
+            "func",
+            lambda _args: route.execute(
+                parser_argv,
+                output=options.output,
+                mutating=spec.mutating,
+                stdout_stream=out,
+                stderr_stream=err,
+            ),
+        )
+        native_environment = dict(env)
+        native_environment["CLI_CONFIGURATION"] = "host"
+        invoke_environment = native_environment
+
+    # Direct attended deployment progress must bypass invoke()'s diagnostic
+    # capture so the operator sees stage updates while commands are running.
+    # JSON stdout remains a single machine-readable result.
+    setattr(
+        args,
+        "_iii_progress_stream",
+        err if options.output == "human" and spec.path == ("deploy", "dev") else None,
+    )
     result, diagnostics = invoke(
         args=args,
         spec=spec,
         argv=parser_argv,
         options=options,
-        environment=env,
+        environment=invoke_environment,
         input_stream=input_stream,
         error_stream=err,
     )
