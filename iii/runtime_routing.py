@@ -23,6 +23,17 @@ CLI_TREE_RELATIVE = "tools/III-Drone-CLI"
 REMOTE_WORKSPACE = "/home/iii/ws"
 REMOTE_CLI = f"{REMOTE_WORKSPACE}/{CLI_TREE_RELATIVE}/bin/iii"
 
+# Remote routes must never hang indefinitely on an unreachable or wedged peer.
+# SSH itself bounds connection setup and detects a dead link; the captured
+# subprocess calls are additionally bounded end to end. A lifecycle command
+# such as a cold ``system boot`` may legitimately wait for the supervisor's
+# bounded service and discovery gates, so its default is deliberately generous.
+DEFAULT_SSH_CONNECT_TIMEOUT_SEC = 10
+DEFAULT_SSH_SERVER_ALIVE_INTERVAL_SEC = 5
+DEFAULT_SSH_SERVER_ALIVE_COUNT_MAX = 3
+DEFAULT_IDENTITY_TIMEOUT_SEC = 30.0
+DEFAULT_COMMAND_TIMEOUT_SEC = 300.0
+
 _TREE_IDENTITY_SCRIPT = r"""
 import hashlib, json, os, sys
 root = sys.argv[1]
@@ -287,6 +298,111 @@ def _run(command: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[s
     return subprocess.run(list(command), check=False, text=True, **kwargs)
 
 
+def _positive_number(
+    environment: Mapping[str, str], key: str, default: float, *, allow_zero: bool = False
+) -> float:
+    raw = environment.get(key, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = -1.0
+    if value != value or value < 0 or (value == 0 and not allow_zero):
+        raise RuntimeRoutingError(
+            "III_RUNTIME_ROUTE_CONFIG_INVALID",
+            f"{key} must be a {'non-negative' if allow_zero else 'positive'} number of seconds, got {raw!r}.",
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class RouteTimeouts:
+    """Bounded transport policy for routed runtime commands."""
+
+    ssh_connect_timeout: int = DEFAULT_SSH_CONNECT_TIMEOUT_SEC
+    ssh_server_alive_interval: int = DEFAULT_SSH_SERVER_ALIVE_INTERVAL_SEC
+    ssh_server_alive_count_max: int = DEFAULT_SSH_SERVER_ALIVE_COUNT_MAX
+    identity_timeout: float = DEFAULT_IDENTITY_TIMEOUT_SEC
+    # ``None`` disables the end-to-end bound (III_RUNTIME_ROUTE_COMMAND_TIMEOUT_SEC=0).
+    command_timeout: float | None = DEFAULT_COMMAND_TIMEOUT_SEC
+
+    @classmethod
+    def from_environment(cls, environment: Mapping[str, str]) -> "RouteTimeouts":
+        command_timeout = _positive_number(
+            environment,
+            "III_RUNTIME_ROUTE_COMMAND_TIMEOUT_SEC",
+            DEFAULT_COMMAND_TIMEOUT_SEC,
+            allow_zero=True,
+        )
+        return cls(
+            ssh_connect_timeout=max(
+                1,
+                round(
+                    _positive_number(
+                        environment,
+                        "III_SSH_CONNECT_TIMEOUT_SEC",
+                        DEFAULT_SSH_CONNECT_TIMEOUT_SEC,
+                    )
+                ),
+            ),
+            ssh_server_alive_interval=max(
+                1,
+                round(
+                    _positive_number(
+                        environment,
+                        "III_SSH_SERVER_ALIVE_INTERVAL_SEC",
+                        DEFAULT_SSH_SERVER_ALIVE_INTERVAL_SEC,
+                    )
+                ),
+            ),
+            ssh_server_alive_count_max=max(
+                1,
+                round(
+                    _positive_number(
+                        environment,
+                        "III_SSH_SERVER_ALIVE_COUNT_MAX",
+                        DEFAULT_SSH_SERVER_ALIVE_COUNT_MAX,
+                    )
+                ),
+            ),
+            identity_timeout=_positive_number(
+                environment,
+                "III_RUNTIME_ROUTE_IDENTITY_TIMEOUT_SEC",
+                DEFAULT_IDENTITY_TIMEOUT_SEC,
+            ),
+            command_timeout=command_timeout or None,
+        )
+
+    def ssh_options(self) -> list[str]:
+        # BatchMode: never block on a password or host-key prompt; the route
+        # is always established non-interactively by the identity check first.
+        return [
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            f"ConnectTimeout={self.ssh_connect_timeout}",
+            "-o",
+            f"ServerAliveInterval={self.ssh_server_alive_interval}",
+            "-o",
+            f"ServerAliveCountMax={self.ssh_server_alive_count_max}",
+        ]
+
+
+def _captured_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _describe_timeout(route: str, endpoint: str, user: str, seconds: float) -> str:
+    if route == "ssh":
+        return f"ssh to {user}@{endpoint} did not complete within {seconds:g} s"
+    return f"docker exec in {endpoint} did not complete within {seconds:g} s"
+
+
 @dataclass(frozen=True)
 class RuntimeRoute:
     install_root: Path
@@ -299,6 +415,7 @@ class RuntimeRoute:
     checkout: str
     expected_cli_hash: str
     observed_cli_hash: str
+    timeouts: RouteTimeouts = RouteTimeouts()
 
     @property
     def plan(self) -> dict[str, str]:
@@ -372,6 +489,7 @@ class RuntimeRoute:
         return [
             "ssh",
             "-tt" if tty else "-T",
+            *self.timeouts.ssh_options(),
             f"{self.user}@{self.endpoint}",
             "bash -lc " + shlex.quote(setup_and_exec),
         ]
@@ -397,7 +515,15 @@ class RuntimeRoute:
                 stdout=stdout_stream,
                 stderr=stderr_stream,
             ).returncode
-        completed = _run(command, capture_output=True)
+        # Interactive/streaming commands (attach, logs --follow) are
+        # intentionally unbounded end to end; SSH keepalives still detect a
+        # dead link. Captured commands are bounded so a wedged route fails.
+        try:
+            completed = _run(
+                command, capture_output=True, timeout=self.timeouts.command_timeout
+            )
+        except subprocess.TimeoutExpired as exc:
+            return self._timeout_result(argv, exc)
         if completed.stderr and stderr_stream is not None:
             stderr_stream.write(completed.stderr)
         if output == "human" and completed.stdout and stdout_stream is not None:
@@ -444,6 +570,35 @@ class RuntimeRoute:
             terminal_reason="The selected runtime completed and its result was retained.",
         )
 
+    def _timeout_result(
+        self, argv: Sequence[str], exc: subprocess.TimeoutExpired
+    ) -> CommandResult:
+        message = (
+            _describe_timeout(self.route, self.endpoint, self.user, float(exc.timeout))
+            + "; the local transport was terminated and the remote command may "
+            "still be running. Inspect the runtime before retrying "
+            "(III_RUNTIME_ROUTE_COMMAND_TIMEOUT_SEC adjusts this bound)."
+        )
+        return CommandResult(
+            command="iii " + " ".join(argv),
+            outcome=Outcome.FAILED,
+            summary="The selected runtime command timed out.",
+            code="III_RUNTIME_ROUTE_TIMEOUT",
+            target=self.target_host,
+            profile=self.target,
+            findings=(Finding("III_RUNTIME_ROUTE_TIMEOUT", message),),
+            payload_schema="iii.runtime-route-result/v1",
+            payload={
+                **self.plan,
+                "exit_status": None,
+                "timeout_seconds": float(exc.timeout),
+                "stdout": _captured_text(exc.stdout),
+                "stderr": _captured_text(exc.stderr),
+                "display": "",
+            },
+            terminal_reason="The routed runtime command exceeded its transport deadline.",
+        )
+
 
 def _strip_runtime_target(argv: Sequence[str]) -> list[str]:
     result: list[str] = []
@@ -467,7 +622,14 @@ def _strip_runtime_target(argv: Sequence[str]) -> list[str]:
     return result
 
 
-def _verify_identity(*, route: str, endpoint: str, user: str, expected: str) -> str:
+def _verify_identity(
+    *,
+    route: str,
+    endpoint: str,
+    user: str,
+    expected: str,
+    timeouts: RouteTimeouts = RouteTimeouts(),
+) -> str:
     if route == "container":
         command = [
             "docker",
@@ -491,8 +653,24 @@ def _verify_identity(*, route: str, endpoint: str, user: str, expected: str) -> 
                 f"{REMOTE_WORKSPACE}/{CLI_TREE_RELATIVE}",
             ]
         )
-        command = ["ssh", "-T", f"{user}@{endpoint}", identity_command]
-    completed = _run(command, capture_output=True)
+        command = [
+            "ssh",
+            "-T",
+            *timeouts.ssh_options(),
+            f"{user}@{endpoint}",
+            identity_command,
+        ]
+    try:
+        completed = _run(
+            command, capture_output=True, timeout=timeouts.identity_timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeRoutingError(
+            "III_RUNTIME_ROUTE_TIMEOUT",
+            "could not verify the selected runtime CLI checkout: "
+            + _describe_timeout(route, endpoint, user, float(exc.timeout))
+            + " (III_RUNTIME_ROUTE_IDENTITY_TIMEOUT_SEC adjusts this bound).",
+        ) from exc
     if completed.returncode:
         detail = (
             completed.stderr.strip()
@@ -528,6 +706,7 @@ def prepare_route(
     install_root, metadata = install
     install_profile = str(metadata["profile"])
     target = _selected_target(args, environment, install_profile=install_profile)
+    timeouts = RouteTimeouts.from_environment(environment)
     checkout = metadata["checkout"].get("checkout", "")
     expected_hash = metadata["checkout"]["content_sha256"][CLI_TREE_RELATIVE]
     if target == "sim":
@@ -563,7 +742,11 @@ def prepare_route(
         user, endpoint = _command_target(environment)
         host = f"{user}@{endpoint}"
     observed_hash = _verify_identity(
-        route=route, endpoint=endpoint, user=user, expected=expected_hash
+        route=route,
+        endpoint=endpoint,
+        user=user,
+        expected=expected_hash,
+        timeouts=timeouts,
     )
     return RuntimeRoute(
         install_root=install_root,
@@ -576,6 +759,7 @@ def prepare_route(
         checkout=str(checkout),
         expected_cli_hash=expected_hash,
         observed_cli_hash=observed_hash,
+        timeouts=timeouts,
     )
 
 

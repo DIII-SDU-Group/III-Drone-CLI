@@ -321,6 +321,139 @@ def test_ssh_identity_failure_is_reported_without_remote_mutation(
     assert len(calls) == 1 and calls[0][0][0] == "ssh"
 
 
+def _ssh_option_values(command):
+    return {
+        command[index + 1].split("=", 1)[0]: command[index + 1].split("=", 1)[1]
+        for index, token in enumerate(command[:-1])
+        if token == "-o"
+    }
+
+
+def test_ssh_route_is_non_interactive_and_bounded_by_default(monkeypatch, tmp_path):
+    _root, environment = _native_install(
+        tmp_path, III_RUNTIME_TARGET="hil", III_SSH_HOST="pi.example"
+    )
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        if len(calls) == 1:
+            return _completed(command, stdout=json.dumps({"sha256": EXPECTED_HASH}))
+        return _completed(command, stdout='{"code":"III_RUNTIME_STATUS"}')
+
+    monkeypatch.setattr(runtime_routing.subprocess, "run", run)
+    assert main(["system", "status", "--json"], stdout=_Output(), environment=environment) == 0
+    assert len(calls) == 2
+    for command, options in calls:
+        assert command[:2] in (["ssh", "-T"],)
+        assert _ssh_option_values(command) == {
+            "BatchMode": "yes",
+            "ConnectTimeout": "10",
+            "ServerAliveInterval": "5",
+            "ServerAliveCountMax": "3",
+        }
+        # The destination and remote command stay last.
+        assert command[-2] == "iii@pi.example"
+    assert calls[0][1]["timeout"] == runtime_routing.DEFAULT_IDENTITY_TIMEOUT_SEC
+    assert calls[1][1]["timeout"] == runtime_routing.DEFAULT_COMMAND_TIMEOUT_SEC
+
+
+def test_ssh_route_timeouts_are_configurable(monkeypatch, tmp_path):
+    _root, environment = _native_install(
+        tmp_path,
+        III_RUNTIME_TARGET="hil",
+        III_SSH_HOST="pi.example",
+        III_SSH_CONNECT_TIMEOUT_SEC="3",
+        III_SSH_SERVER_ALIVE_INTERVAL_SEC="2",
+        III_SSH_SERVER_ALIVE_COUNT_MAX="4",
+        III_RUNTIME_ROUTE_IDENTITY_TIMEOUT_SEC="7.5",
+        III_RUNTIME_ROUTE_COMMAND_TIMEOUT_SEC="0",
+    )
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        if len(calls) == 1:
+            return _completed(command, stdout=json.dumps({"sha256": EXPECTED_HASH}))
+        return _completed(command, stdout='{"code":"III_RUNTIME_STATUS"}')
+
+    monkeypatch.setattr(runtime_routing.subprocess, "run", run)
+    assert main(["system", "status", "--json"], stdout=_Output(), environment=environment) == 0
+    assert _ssh_option_values(calls[0][0])["ConnectTimeout"] == "3"
+    assert _ssh_option_values(calls[1][0])["ServerAliveInterval"] == "2"
+    assert _ssh_option_values(calls[1][0])["ServerAliveCountMax"] == "4"
+    assert calls[0][1]["timeout"] == 7.5
+    # Zero explicitly disables the end-to-end command bound.
+    assert calls[1][1]["timeout"] is None
+
+
+@pytest.mark.parametrize("value", ["soon", "-1", "0"])
+def test_invalid_ssh_timeout_configuration_is_rejected_before_ssh(
+    monkeypatch, tmp_path, value
+):
+    _root, environment = _native_install(
+        tmp_path,
+        III_RUNTIME_TARGET="hil",
+        III_SSH_HOST="pi.example",
+        III_SSH_CONNECT_TIMEOUT_SEC=value,
+    )
+    calls = []
+    monkeypatch.setattr(
+        runtime_routing.subprocess, "run", lambda command, **kwargs: calls.append(command)
+    )
+    stdout = _Output()
+    assert main(["system", "status", "--json"], stdout=stdout, environment=environment) == 20
+    assert json.loads(stdout.value)["code"] == "III_RUNTIME_ROUTE_CONFIG_INVALID"
+    assert calls == []
+
+
+def test_ssh_identity_timeout_is_a_distinct_rejection(monkeypatch, tmp_path):
+    _root, environment = _native_install(
+        tmp_path, III_RUNTIME_TARGET="hil", III_SSH_HOST="pi.example"
+    )
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(runtime_routing.subprocess, "run", run)
+    stdout = _Output()
+    assert main(["system", "start", "--json"], stdout=stdout, environment=environment) == 20
+    result = json.loads(stdout.value)
+    assert result["code"] == "III_RUNTIME_ROUTE_TIMEOUT"
+    message = result["findings"][0]["message"]
+    assert "ssh to iii@pi.example did not complete within 30 s" in message
+    assert len(calls) == 1
+
+
+def test_ssh_command_timeout_is_a_distinct_failure_with_partial_output(
+    monkeypatch, tmp_path
+):
+    _root, environment = _native_install(
+        tmp_path, III_RUNTIME_TARGET="hil", III_SSH_HOST="pi.example"
+    )
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        if len(calls) == 1:
+            return _completed(command, stdout=json.dumps({"sha256": EXPECTED_HASH}))
+        raise subprocess.TimeoutExpired(
+            command, kwargs["timeout"], output=b"partial status output", stderr=None
+        )
+
+    monkeypatch.setattr(runtime_routing.subprocess, "run", run)
+    stdout = _Output()
+    assert main(["system", "status", "--json"], stdout=stdout, environment=environment) == 30
+    result = json.loads(stdout.value)
+    assert result["code"] == "III_RUNTIME_ROUTE_TIMEOUT"
+    assert result["payload"]["exit_status"] is None
+    assert result["payload"]["stdout"] == "partial status output"
+    assert result["payload"]["timeout_seconds"] == runtime_routing.DEFAULT_COMMAND_TIMEOUT_SEC
+    assert "remote command may still be running" in result["findings"][0]["message"]
+
+
 def test_explicit_opti_track_target_overrides_sourced_field_real_default(
     monkeypatch, tmp_path
 ):
@@ -611,6 +744,9 @@ def test_attach_uses_tty_route_and_propagates_exit_status(monkeypatch, tmp_path)
     command, options = calls[1]
     assert command[1] == "-tt"
     assert "capture_output" not in options
+    assert "timeout" not in options
+    assert _ssh_option_values(command)["ConnectTimeout"] == "10"
+    assert _ssh_option_values(command)["ServerAliveInterval"] == "5"
 
 
 def test_onboard_profiles_select_supported_local_cli_mode(tmp_path):
