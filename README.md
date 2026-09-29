@@ -1,150 +1,54 @@
-# III-Drone-CLI
+# III CLI
 
-`iii` is the command-line entry point for building, deploying, configuring, and operating the III system from host, container, development, or remote environments.
+The III CLI is a convenience layer for direct developer work on the aircraft.
+It intentionally does not implement release bundles, signing, a receiver,
+enrollment, replay nonces, or qualification gates.
 
-## Package Role
+The standalone workspace installer (`scripts/install_gc.py --profile dev` or
+`--profile deploy`) also installs this CLI natively on a Linux x86_64 ground
+computer. Its `~/.local/bin/iii` wrapper selects the installed checkout. Use
+`--runtime-target sim|hil|opti_track|real` for runtime-facing commands on that
+computer; SIM routes into the checkout-labeled devcontainer and the other
+targets route to a configured Pi over SSH after a CLI source-identity check.
+Set `III_SSH_HOST` or source the matching workstation profile before a Pi
+command. Inside the devcontainer or Pi, source the local `setup/` profile and
+run `iii` directly without a remote hop. `iii qgc` operates the host-native
+pinned QGroundControl service; `iii api` controls the selected runtime API
+service, and `iii rosbag` controls the selected runtime recorder.
 
-The CLI package provides:
-
-- the top-level `iii` command dispatcher
-- subcommands for system control, configuration access, build flows, and deployment flows
-- thin environment-specific wrappers around daemon-backed system actions, the
-  runtime API remote-control client, tmux sessions, container helpers, and
-  SSH-based deployment/administration
-
-## Universal Result And Operation Contract
-
-Every executable parser leaf is dispatched through one versioned
-`iii.command-result/v1` envelope. Human and JSON renderings use the same
-summary, findings, operation state, context, evidence, payload, and ordered
-`next_actions[]`; commands never need to parse terminal decoration to decide
-what happened.
-
-Universal controls may appear before or after the command path:
+## Direct aircraft loop
 
 ```bash
-iii system status --output=json
-iii system start --dry-run --output=json
-iii system start --operation-id <id> --confirm --non-interactive --output=json
-iii system start --operation-id <id> --resume --confirm --non-interactive
+iii host provision --host iii.local
+iii deploy dev --host iii.local --build --restart
+iii host inspect --host iii.local
+iii px4 inspect --host iii.local
 ```
 
-Mutating commands retain an exact, content-addressed plan and atomic operation
-state under `III_OPERATION_STATE_DIR` or the platform state directory.
-`--dry-run` performs no mutation. Non-interactive mutation requires
-`--confirm`; any nested host/password prompt is rejected as
-`III_REQUIRED_INPUT`. Reusing an operation ID with different argv or context is
-rejected, while replaying an already completed operation is a no-op. Ctrl-C
-returns status 130, retains the checkpoint, and emits an exact reattach command.
+`iii deploy dev` uses normal SSH and rsync to synchronize the clean direct
+children of `src/`, plus `setup/`, `scripts/`, `tools/`, and `deployment/`, into
+`/home/iii/ws`. By default, source-only deploys leave dirty source components
+local; `--build` includes all dirty source components to match the cross-built
+install tree. Use
+`--path src/<component>` to deliberately synchronize a work-in-progress
+component. Add `--mirror` only when the remote workspace should exactly match
+the selected local source. `--dry-run` previews a command without
+connecting or copying.
 
-Structured stdout contains one JSON object only. Legacy handler output is
-captured into the envelope payload, including child-process stdout, while
-diagnostics use stderr. Help, parser errors, missing environment setup, and
-internal errors use the same result and next-action contract.
+Human `deploy dev` runs print the target, workspace, and plan first, followed
+by stage updates for the cross-build, Pi workspace setup, source sync, install
+sync, Pi CLI installation, and restart. After syncing, deployment installs
+`/usr/local/bin/iii` and `$HOME/.local/bin/iii` for the SSH login as links to
+the workspace entry point (`/home/iii/.local/bin/iii` for the default account),
+then verifies `iii --help` over SSH before any requested restart.
+Long-running commands emit elapsed-time heartbeats. Command
+output is kept in the deployment receipt's adjacent `logs/` directory; failures
+show the command, log path, and a short diagnostic tail. `--json` keeps stdout
+machine-readable and omits live progress.
 
-## Supported Modes
+`iii host image write --image <image> --device /dev/<device>` writes a supplied
+Pi image directly. It has no image signing or staging protocol.
 
-The CLI behavior depends on `CLI_CONFIGURATION`:
-
-- `host`: forwards many commands into the CLI container or local tmux workflows
-- `container`: runs against the local system daemon inside a containerized environment
-- `dev`: runs against the local system daemon inside the devcontainer
-- `remote`: uses `iii-runtime-api` for runtime-control commands and SSH-driven
-  helpers for deployment, sync, install, and explicit admin workflows
-
-## System Commands
-
-`iii system ...` is the operator-facing control surface for the supervision daemon. `iii system boot` requires systemd and starts `iii-system-daemon.service` when the daemon is not already running.
-
-Core commands:
-
-```bash
-iii system boot
-iii system attach
-iii system start
-iii system stop
-iii system restart
-iii system status
-iii system logs <entity_id>
-```
-
-Systemd daemon ownership is exposed through:
-
-```bash
-iii system daemon start
-iii system daemon stop
-iii system daemon restart
-iii system daemon status
-iii system daemon logs
-iii system daemon logs --follow
-```
-
-Daemon-managed services use an explicit service scope:
-
-```bash
-iii system service list
-iii system service start micro_ros_agent
-iii system service stop micro_ros_agent
-iii system service restart micro_ros_agent
-```
-
-Service logs use the same log command as launched entities:
-
-```bash
-iii system logs micro_ros_agent
-```
-
-## Remote Runtime API Mode
-
-Set these on the operator machine for remote runtime-control commands:
-
-```bash
-export CLI_CONFIGURATION=remote
-export III_RUNTIME_API_URL=http://<runtime-host>:8765
-export III_RUNTIME_API_CLI_TOKEN=<remote-cli-token>
-```
-
-Remote `iii system status`, runtime mutations, entity/service lists, and log
-reads use `iii-runtime-api`. They are not implemented by forwarding shell
-commands over SSH. Mutating remote CLI commands are rejected while an active
-browser GUI session holds the operator lease; read-only status/list/log
-operations remain available.
-
-SSH remains available for deployment and administration commands such as
-workspace sync, install, and `iii deploy ssh`.
-
-## Module Map
-
-- `__main__.py`: top-level argument parser and subcommand dispatcher
-- `system.py`: user-facing system-management command wiring
-- `system_client.py`: compatibility wrapper for the runtime-owned Unix-socket
-  daemon client
-- `runtime_api_client.py`: HTTP client for remote `iii-runtime-api` runtime
-  control and logs
-- `config.py`: launches or forwards the configuration client
-- `build.py`: container-image, workspace, and cross-compilation build entry points
-- `deploy.py`: remote deployment/install helpers
-- `container_manager.py`: Docker Compose command wrapper used in host mode
-- `tmux_handler.py`: tmux session management
-- `ssh_manager.py`: SSH, SCP, and rsync helpers for remote workflows
-
-## Tests
-
-Tests cover:
-
-- command dispatch from the top-level parser
-- daemon-client request/response behavior
-- system log selection behavior
-- tmux session materialization
-
-Typical package-only commands:
-
-```bash
-python3 -m pytest tools/III-Drone-CLI/test -q
-```
-
-## Maintenance Guidelines
-
-- keep business logic out of `__main__.py`; it should only dispatch
-- prefer thin environment adapters instead of branching everywhere inside a single function
-- add tests whenever argument composition changes, because regressions here are easy to miss manually
+The system, mission, and configuration commands remain available for normal
+runtime inspection and development. PX4 inspection is read-only; explicit PX4
+firmware and parameter changes stay in PX4 and QGroundControl tooling.
