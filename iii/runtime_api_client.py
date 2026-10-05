@@ -144,22 +144,6 @@ class RuntimeApiClient:
 
         return self._request("GET", "/cli/configuration/state")
 
-    def configuration_capture_source(
-        self, *, snapshot_id: str, expected_profile: str
-    ) -> dict[str, Any]:
-        query = urlencode({"expected_profile": expected_profile})
-        encoded = quote(snapshot_id, safe="")
-        return self._request(
-            "GET", f"/cli/configuration/capture-source/{encoded}?{query}"
-        )
-
-    def delete_configuration_snapshot(
-        self, request_value: dict[str, Any]
-    ) -> dict[str, Any]:
-        return self._request(
-            "POST", "/cli/configuration/snapshots/delete", request_value
-        )
-
     def _request(
         self, method: str, path: str, body: dict[str, Any] | None = None
     ) -> dict[str, Any]:
