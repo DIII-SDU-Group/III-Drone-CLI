@@ -49,6 +49,18 @@ machine-readable and omits live progress.
 `iii host image write --image <image> --device /dev/<device>` writes a supplied
 Pi image directly. It has no image signing or staging protocol.
 
+`iii host provision --profile hil|real|opti_track` writes the aircraft
+runtime environment, including the stack's ROS 2 domain (`--ros-domain-id`,
+default 42; the flight controller's `UXRCE_DDS_DOM_ID` must equal it). For a
+lab or field Wi-Fi network, add `--wifi-ssid <ssid>` and either
+`--wifi-psk-file <owner-only file outside the checkout>` or the interactive
+passphrase prompt, plus `--wifi-country <CC>` where needed. The passphrase
+reaches Ansible only through a temporary owner-only variables file and is
+stored only on the Pi; `--remove-wifi` removes the Wi-Fi client again.
+
 The system, mission, and configuration commands remain available for normal
-runtime inspection and development. PX4 inspection is read-only; explicit PX4
-firmware and parameter changes stay in PX4 and QGroundControl tooling.
+runtime inspection and development. PX4 inspection is read-only and uses the
+profile provisioned on the Pi unless `--profile` selects one; for real and
+OptiTrack it also requires a `/fmu/out/vehicle_status_v1` sample in the
+provisioned ROS domain. Explicit PX4 firmware and parameter changes stay in
+PX4 and QGroundControl tooling.
