@@ -58,6 +58,14 @@ passphrase prompt, plus `--wifi-country <CC>` where needed. The passphrase
 reaches Ansible only through a temporary owner-only variables file and is
 stored only on the Pi; `--remove-wifi` removes the Wi-Fi client again.
 
+`iii host clock sync --profile real|opti_track --host <pi> --confirm` runs on
+the ground computer (ground control calls it for an aircraft whose clock is
+unsettled). It refuses unless the runtime API shows the aircraft disarmed and
+landed, steps a Pi that follows a time source, otherwise adds this ground
+computer as a runtime-only chrony source on the Pi (its chrony must `allow` the
+Pi), and exits 0 only once chrony reports `Leap status: Normal` within 0.1 s,
+in at most 40 s.
+
 The system, mission, and configuration commands remain available for normal
 runtime inspection and development. PX4 inspection is read-only and uses the
 profile provisioned on the Pi unless `--profile` selects one; for real and

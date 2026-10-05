@@ -484,6 +484,13 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     )
     provision_parser.set_defaults(func=provision, _iii_mutating=False, _iii_direct_mutation=True)
 
+    clock_parser = subparsers.add_parser(
+        "clock", help="settle an aircraft's onboard clock from this ground computer"
+    )
+    from . import host_clock
+
+    host_clock.initialize(clock_parser)
+
     image_parser = subparsers.add_parser("image", help="write a selected image directly to removable media")
     image_commands = image_parser.add_subparsers(dest="host_image_command")
     write_parser = image_commands.add_parser("write", help="write an image to an explicit block device")
