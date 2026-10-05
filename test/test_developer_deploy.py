@@ -923,7 +923,6 @@ def test_deferred_sigint_restores_handler_when_popen_fails(monkeypatch, tmp_path
 def test_keyboard_interrupt_kills_owned_process_group_descendants(monkeypatch, tmp_path):
     pid_file = tmp_path / "grandchild.pid"
     workspace = _workspace(tmp_path / "workspace")
-    receipts = tmp_path / "receipts"
     monkeypatch.setattr(developer_deploy, "_workspace", lambda: workspace)
     parent = (
         "import subprocess,sys,time; "

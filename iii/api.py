@@ -7,7 +7,7 @@ import os
 import subprocess
 from typing import Mapping, Sequence
 
-from .result import CommandResult, Finding, NextAction, Outcome
+from .result import CommandResult, Finding, Outcome
 
 
 SERVICE_DEFAULT = "iii-runtime-api.service"

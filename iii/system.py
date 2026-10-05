@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import argparse
 import os
 from pathlib import Path
 import subprocess
 import time
+from typing import TYPE_CHECKING
 
 from .runtime_api_client import RuntimeApiClient, RuntimeApiError
 from .tmux_handler import TmuxHandler
-from .result import CommandResult, Finding, NextAction, Outcome
+
+if TYPE_CHECKING:
+    from .system_client import DaemonClient
 
 RUNTIME_BOOT = "runtime.boot"
 RUNTIME_START = "runtime.start"

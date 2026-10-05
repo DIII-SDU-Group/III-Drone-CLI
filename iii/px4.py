@@ -6,7 +6,6 @@ import argparse
 import re
 import shlex
 import subprocess
-from typing import Any
 
 from .result import CommandResult, Finding, NextAction, Outcome
 

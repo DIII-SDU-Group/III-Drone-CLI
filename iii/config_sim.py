@@ -78,15 +78,6 @@ def _checkpoint_path(root: Path, checkpoint_id: str) -> Path:
     return path
 
 
-def _release_id(args: argparse.Namespace, manifest_id: str) -> str:
-    env = _environment(args)
-    return (
-        env.get("III_ACTIVE_RELEASE_ID")
-        or env.get("III_WORKSPACE_RELEASE_ID")
-        or manifest_id
-    )
-
-
 def _simulation_plan(args: argparse.Namespace):
     from iii_drone_configuration import (
         load_installed_contract,
@@ -96,7 +87,7 @@ def _simulation_plan(args: argparse.Namespace):
     _workspace_path, living, _checkpoint_root, operations = _roots(args)
     contract_root = _contract(args)
     contract = load_installed_contract(contract_root).contract
-    release_id = _release_id(args, contract.manifest_id)
+    release_id = contract.manifest_id
     plan = plan_simulation_reconciliation(
         immutable_root=contract_root,
         writable_state_root=living,
@@ -450,7 +441,7 @@ def reset(args: argparse.Namespace) -> CommandResult:
                     shutil.copytree(source, replacement / retained_name)
             contract_root = _contract(args)
             contract = load_installed_contract(contract_root).contract
-            release_id = _release_id(args, contract.manifest_id)
+            release_id = contract.manifest_id
             plan = plan_reconciliation(
                 old_immutable_root=contract_root,
                 new_immutable_root=contract_root,

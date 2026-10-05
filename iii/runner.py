@@ -275,7 +275,7 @@ def _context(
     environment: Mapping[str, str],
     *,
     command_path: Sequence[str] = (),
-) -> tuple[str | None, str | None, str | None]:
+) -> tuple[str | None, str | None]:
     target = next(
         (
             str(getattr(args, name))
@@ -297,12 +297,7 @@ def _context(
     profile = explicit_profile or (
         environment.get("III_SYSTEM_PROFILE") if inherit_environment_profile else None
     )
-    release_id = getattr(args, "release_id", None) or getattr(args, "version", None)
-    return (
-        target,
-        str(profile) if profile else None,
-        str(release_id) if release_id else None,
-    )
+    return target, str(profile) if profile else None
 
 
 def _action_for(
@@ -434,7 +429,6 @@ def _retained_plan(
     spec: CommandSpec,
     target: str | None,
     profile: str | None,
-    release_id: str | None,
     preflight: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     existing = store.load_plan(identifier)
@@ -443,7 +437,7 @@ def _retained_plan(
             "command": spec.identity,
             "argv": list(argv),
             "mutating": spec.mutating,
-            "context": {"target": target, "profile": profile, "release_id": release_id},
+            "context": {"target": target, "profile": profile},
         }
         if preflight is not None:
             expected["preflight"] = dict(preflight)
@@ -467,7 +461,6 @@ def _retained_plan(
         mutating=spec.mutating,
         target=target,
         profile=profile,
-        release_id=release_id,
         preflight=preflight,
     )
     return plan, store.retain_plan(plan)
@@ -563,7 +556,7 @@ def invoke(
     env = os.environ if environment is None else environment
     stdin = sys.stdin if input_stream is None else input_stream
     prompt_stream = sys.stderr if error_stream is None else error_stream
-    target, profile, release_id = _context(args, env, command_path=spec.path)
+    target, profile = _context(args, env, command_path=spec.path)
     config_failure = _configuration_failure(spec, env)
     if config_failure is not None:
         return config_failure, ""
@@ -610,7 +603,6 @@ def invoke(
                 spec=spec,
                 target=target,
                 profile=profile,
-                release_id=release_id,
                 preflight=preflight,
             )
             if state.get("state") == "completed":
@@ -624,7 +616,6 @@ def invoke(
                         state="completed",
                         target=target,
                         profile=profile,
-                        release_id=release_id,
                         evidence=tuple(state.get("evidence", [])),
                         payload_schema="iii.cli-operation-plan/v1",
                         payload={"plan": plan},
@@ -650,7 +641,6 @@ def invoke(
                         state="planned",
                         target=target,
                         profile=profile,
-                        release_id=release_id,
                         payload_schema="iii.cli-operation-plan/v1",
                         payload={"plan": plan},
                         next_actions=(_plan_action(argv, identifier),),
@@ -695,7 +685,6 @@ def invoke(
                             state="cancelled",
                             target=target,
                             profile=profile,
-                            release_id=release_id,
                             next_actions=(action,),
                         ),
                         "",
@@ -800,7 +789,6 @@ def invoke(
                 state="interrupted" if identifier else None,
                 target=target,
                 profile=profile,
-                release_id=release_id,
                 payload_schema="iii.command-transcript/v1",
                 payload={"display": stdout_buffer.getvalue().rstrip()},
                 next_actions=(
@@ -829,7 +817,6 @@ def invoke(
                     "state": "failed",
                     "target": target,
                     "profile": profile,
-                    "release_id": release_id,
                 }
             )
         return result, stderr_buffer.getvalue()
@@ -847,7 +834,6 @@ def invoke(
                 ),
                 target=result.target or target,
                 profile=result.profile or profile,
-                release_id=result.release_id or release_id,
             )
     else:
         if isinstance(returned, bool):
@@ -881,7 +867,6 @@ def invoke(
             ),
             target=target,
             profile=profile,
-            release_id=release_id,
             payload_schema="iii.command-transcript/v1",
             payload={"display": stdout_buffer.getvalue().rstrip()},
             next_actions=(

@@ -379,7 +379,6 @@ def test_operation_store_files_are_private_and_content_addressed(tmp_path):
         mutating=True,
         target=None,
         profile="sim",
-        release_id=None,
     )
     store = OperationStore(tmp_path)
     state = store.retain_plan(plan)

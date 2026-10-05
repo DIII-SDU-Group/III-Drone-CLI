@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 import shlex
 import subprocess

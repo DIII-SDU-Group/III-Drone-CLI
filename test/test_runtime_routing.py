@@ -154,7 +154,6 @@ def test_dry_run_exposes_target_profile_and_checkout_route(monkeypatch, tmp_path
     assert result["context"] == {
         "target": "devcontainer:dev-123",
         "profile": "sim",
-        "release_id": None,
     }
     assert result["payload"]["plan"]["preflight"]["runtime_target"] == "sim"
     assert (
@@ -763,7 +762,6 @@ def test_onboard_profiles_select_supported_local_cli_mode(tmp_path):
             {
                 "III_HIL_ONBOARD_RUNTIME_ENV": str(fake_hil_runtime_env),
                 "III_ROS_PREFIX": str(fake_ros),
-                "III_RELEASE_ROOT": str(tmp_path / "missing-release"),
             },
             "dev|hil|hil|iii.local",
         ),

@@ -11,7 +11,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
@@ -92,7 +91,6 @@ def create_plan(
     mutating: bool,
     target: str | None,
     profile: str | None,
-    release_id: str | None,
     preflight: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not OPERATION_ID.fullmatch(identifier):
@@ -107,7 +105,6 @@ def create_plan(
         "context": {
             "target": target,
             "profile": profile,
-            "release_id": release_id,
         },
     }
     if preflight is not None:
@@ -176,21 +173,6 @@ class OperationStore:
     def load_record(self, identifier: str, name: str) -> dict[str, Any] | None:
         return self._read(self.record_path(identifier, name))
 
-    def list_operations(self) -> list[str]:
-        if not self.root.exists():
-            return []
-        if self.root.is_symlink() or not self.root.is_dir():
-            raise OperationError("operation-state root must be a real directory")
-        values = []
-        for path in sorted(self.root.iterdir(), key=lambda item: item.name):
-            if path.name.startswith("."):
-                continue
-            if path.is_symlink() or not path.is_dir():
-                raise OperationError("operation registry contains an unsafe entry")
-            self._validate_id(path.name)
-            values.append(path.name)
-        return values
-
     def load_plan(self, identifier: str) -> dict[str, Any] | None:
         value = self._read(self.plan_path(identifier))
         if value is not None:
@@ -257,32 +239,6 @@ class OperationStore:
             state["attempt"] = int(state.get("attempt", 0)) + 1
         self.save_state(state)
         return state
-
-    def remove_operation(
-        self, identifier: str, *, expected_records: Mapping[str, str]
-    ) -> None:
-        """Remove one exact operation snapshot while holding the registry lock."""
-
-        root = self.operation_path(identifier)
-        with self._locked():
-            if root.parent != self.root or root.is_symlink() or not root.is_dir():
-                raise OperationConflict("prune target escaped the operation registry")
-            observed: dict[str, str] = {}
-            for path in sorted(root.glob("*.json"), key=lambda item: item.name):
-                value = self._read(path)
-                if value is None:
-                    raise OperationConflict("prune candidate record disappeared")
-                observed[path.name] = content_id(value)
-            if observed != dict(expected_records):
-                raise OperationConflict(
-                    "prune candidate changed after the retained preflight"
-                )
-            shutil.rmtree(root)
-            descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
 
     def _atomic_write(self, path: Path, value: Mapping[str, Any]) -> None:
         if self.root.is_symlink():

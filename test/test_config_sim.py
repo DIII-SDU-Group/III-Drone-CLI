@@ -31,7 +31,6 @@ def _environment(workspace: Path, contract: Path) -> dict[str, str]:
         ),
         "III_OPERATIONS_ROOT": str(workspace / ".iii/operations"),
         "III_OPERATION_STATE_DIR": str(workspace / ".iii/operations"),
-        "III_ACTIVE_RELEASE_ID": "workspace-fixture-release",
     }
 
 
@@ -49,6 +48,12 @@ def _invoke(argv: list[str], environment: dict[str, str]) -> tuple[int, dict]:
     return status, value
 
 
+def _manifest_id(contract: Path) -> str:
+    from iii_drone_configuration import load_installed_contract
+
+    return load_installed_contract(contract).contract.manifest_id
+
+
 def _seed(contract: Path, workspace: Path) -> Path:
     from iii_drone_configuration import reconcile_simulation_startup
 
@@ -59,7 +64,7 @@ def _seed(contract: Path, workspace: Path) -> Path:
         operations_root=workspace / ".iii/operations",
         runtime_profile="sim",
         target_id="sim",
-        release_id="workspace-fixture-release",
+        release_id=_manifest_id(contract),
     )
     assert result.status == "complete"
     return living
@@ -276,8 +281,8 @@ def test_sim_review_cli_blocks_then_seals_complete_decisions_and_resumes(
         operation_id="cli-retire-review-0001",
         runtime_profile="sim",
         target_id="sim",
-        old_release_id="workspace-fixture-release",
-        new_release_id="workspace-removed-release",
+        old_release_id=_manifest_id(old),
+        new_release_id=_manifest_id(removed),
         mode="simulation",
         purpose="startup",
     )
@@ -287,7 +292,6 @@ def test_sim_review_cli_blocks_then_seals_complete_decisions_and_resumes(
         not in yaml.safe_load(tracked.read_text())["/**"]["ros__parameters"]
     )
     environment = _environment(workspace, reintroduced)
-    environment["III_ACTIVE_RELEASE_ID"] = "workspace-reintroduced-release"
 
     status, inspected = _invoke(["config", "sim", "inspect"], environment)
     assert status == 0

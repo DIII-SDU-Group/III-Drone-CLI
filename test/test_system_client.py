@@ -1,7 +1,6 @@
 import json
 import socketserver
 import threading
-from pathlib import Path
 from types import SimpleNamespace
 
 from iii.system_client import DaemonClient
