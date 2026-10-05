@@ -771,7 +771,8 @@ def test_onboard_profiles_select_supported_local_cli_mode(tmp_path):
             "setup_real.bash",
             {
                 "III_ROS_PREFIX": str(fake_ros),
-                "III_RELEASE_ROOT": str(tmp_path / "missing-release"),
+                "III_WORKSPACE_INSTALL": str(tmp_path / "missing-install"),
+                "III_ONBOARD_RUNTIME_ENV": str(tmp_path / "missing-runtime.env"),
             },
             "dev|real|real|",
         ),
@@ -779,7 +780,8 @@ def test_onboard_profiles_select_supported_local_cli_mode(tmp_path):
             "setup_opti_track.bash",
             {
                 "III_ROS_PREFIX": str(fake_ros),
-                "III_RELEASE_ROOT": str(tmp_path / "missing-release"),
+                "III_WORKSPACE_INSTALL": str(tmp_path / "missing-install"),
+                "III_ONBOARD_RUNTIME_ENV": str(tmp_path / "missing-runtime.env"),
             },
             "dev|opti_track|opti_track|",
         ),
@@ -813,6 +815,74 @@ def test_onboard_profiles_select_supported_local_cli_mode(tmp_path):
         )
         assert completed.returncode == 0, completed.stderr
         assert completed.stdout == expected
+
+
+@pytest.mark.parametrize("target", ["real", "opti_track"])
+def test_aircraft_route_setup_adopts_the_provisioned_runtime_contract(tmp_path, target):
+    """Run the routed SSH setup locally against this checkout's setup profile.
+
+    The Pi's daemon listens on the provisioned socket and the stack runs in
+    the provisioned ROS domain; the routed CLI must use both, never the
+    workspace defaults or the API listener alias.
+    """
+
+    workspace = Path(__file__).resolve().parents[3]
+    fake_ros = tmp_path / "ros"
+    fake_ros.mkdir()
+    (fake_ros / "setup.bash").write_text(":\n", encoding="utf-8")
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text(
+        f"III_SYSTEM_PROFILE={target}\n"
+        "ROS_DOMAIN_ID=57\n"
+        "RMW_IMPLEMENTATION=rmw_fastrtps_cpp\n"
+        "III_SYSTEM_RUNTIME_DIR=/run/iii\n"
+        "III_SYSTEM_DAEMON_SOCKET=/run/iii/system_manager.sock\n"
+        "CONFIG_BASE_DIR=/home/iii/.config/iii_drone\n"
+        "III_RUNTIME_API_HOST=0.0.0.0\n",
+        encoding="utf-8",
+    )
+    route = runtime_routing.RuntimeRoute(
+        install_root=tmp_path,
+        install_profile="deploy",
+        target=target,
+        route="ssh",
+        endpoint="pi.example",
+        target_host="iii@pi.example",
+        user="iii",
+        checkout=str(workspace),
+        expected_cli_hash=EXPECTED_HASH,
+        observed_cli_hash=EXPECTED_HASH,
+    )
+    command = route._execution_command(["system", "status"], tty=False)
+    remote = shlex.split(command[-1])
+    assert remote[:2] == ["bash", "-lc"]
+    setup, separator, cli = remote[2].rpartition("exec ")
+    assert separator and cli.endswith("bin/iii system status")
+    script = setup.replace(runtime_routing.REMOTE_WORKSPACE, str(workspace)) + (
+        "printf '%s|%s|%s|%s|%s|%s' \"$CLI_CONFIGURATION\" \"$III_SYSTEM_PROFILE\" "
+        "\"$III_SYSTEM_DAEMON_SOCKET\" \"$CONFIG_BASE_DIR\" \"$ROS_DOMAIN_ID\" "
+        "\"${III_RUNTIME_API_HOST:-unset}\""
+    )
+    completed = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "III_ROS_PREFIX": str(fake_ros),
+            "III_WORKSPACE_INSTALL": str(tmp_path / "missing-install"),
+            "III_ONBOARD_RUNTIME_ENV": str(runtime_env),
+            # A ground-computer shell's endpoint aliases must not leak in.
+            "III_RUNTIME_API_HOST": "pi.example",
+            "III_RUNTIME_API_URL": "http://pi.example:8765",
+        },
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == (
+        f"dev|{target}|/run/iii/system_manager.sock|/home/iii/.config/iii_drone|57|unset"
+    )
 
 
 def test_local_cli_without_native_install_keeps_legacy_dispatch():
