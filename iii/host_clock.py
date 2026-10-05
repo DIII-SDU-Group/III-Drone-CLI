@@ -26,7 +26,7 @@ import time
 from typing import Any, Mapping
 
 from .result import CommandResult, Finding, NextAction, Outcome
-from .runtime_api_client import RuntimeApiClient, RuntimeApiError, _cli_token_from_env
+from .runtime_api_client import RuntimeApiClient, RuntimeApiError
 from .runtime_routing import RouteTimeouts
 
 
@@ -382,7 +382,6 @@ class _Sync:
         try:
             client = RuntimeApiClient(
                 base_url=f"http://{self.host}:{os.environ.get('III_RUNTIME_API_PORT', '8765')}",
-                cli_token=_cli_token_from_env(),
                 timeout_seconds=API_TIMEOUT_SECONDS,
             )
             identity = client.identity()

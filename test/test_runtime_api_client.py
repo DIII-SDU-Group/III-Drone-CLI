@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
-from iii.runtime_api_client import RuntimeApiClient, RuntimeApiError
+from iii.runtime_api_client import RuntimeApiClient
 
 
-def test_configuration_mirror_transport_is_cli_authenticated(
+def test_configuration_mirror_transport_uses_cli_endpoints(
     monkeypatch,
 ):
     import iii.runtime_api_client as module
@@ -31,7 +27,6 @@ def test_configuration_mirror_transport_is_cli_authenticated(
     monkeypatch.setattr(module, "urlopen", open_request)
     client = RuntimeApiClient(
         base_url="http://iii.local:8765",
-        cli_token="mirror-token",
         timeout_seconds=9,
     )
 
@@ -49,10 +44,6 @@ def test_configuration_mirror_transport_is_cli_authenticated(
     )
     assert requests[1][0].full_url.endswith("/cli/configuration/state")
     assert len(requests) == 2
-    assert all(
-        request.headers["X-iii-cli-token"] == "mirror-token"
-        for request, _kwargs in requests
-    )
     assert all(kwargs["timeout"] == 9 for _request, kwargs in requests)
 
 
@@ -67,7 +58,6 @@ def test_runtime_api_client_default_timeout_allows_lifecycle_operations(monkeypa
 
 def test_explicit_target_endpoint_overrides_ambient_runtime_url(monkeypatch):
     monkeypatch.setenv("III_RUNTIME_API_URL", "http://localhost:8765")
-    monkeypatch.setenv("III_RUNTIME_API_CLI_TOKEN", "token")
 
     aircraft = RuntimeApiClient.from_env(endpoint="iii.local")
     simulation = RuntimeApiClient.from_env(endpoint="local")
@@ -96,9 +86,7 @@ def test_identity_and_vehicle_status_use_expected_read_only_endpoints(monkeypatc
         return Response()
 
     monkeypatch.setattr(module, "urlopen", open_request)
-    client = RuntimeApiClient(
-        base_url="http://iii.local:8765", cli_token="machine-token"
-    )
+    client = RuntimeApiClient(base_url="http://iii.local:8765")
 
     assert client.identity()["profile"] == "hil"
     assert client.vehicle_status()["armed"] is False
@@ -106,36 +94,3 @@ def test_identity_and_vehicle_status_use_expected_read_only_endpoints(monkeypatc
         "http://iii.local:8765/identity",
         "http://iii.local:8765/cli/vehicle/status",
     ]
-    assert all(
-        request.headers["X-iii-cli-token"] == "machine-token"
-        for request, _kwargs in requests
-    )
-
-
-def test_runtime_api_client_uses_owner_only_default_token_file(
-    monkeypatch, tmp_path: Path
-):
-    token = tmp_path / "iii/credentials/runtime-api.token"
-    token.parent.mkdir(parents=True)
-    token.write_text("enrolled-token\n")
-    token.chmod(0o600)
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    monkeypatch.delenv("III_RUNTIME_API_CLI_TOKEN", raising=False)
-    monkeypatch.delenv("III_RUNTIME_API_TOKEN_FILE", raising=False)
-
-    client = RuntimeApiClient.from_env()
-
-    assert client.cli_token == "enrolled-token"
-
-
-def test_runtime_api_client_rejects_unsafe_token_file(
-    monkeypatch, tmp_path: Path
-):
-    token = tmp_path / "runtime-api.token"
-    token.write_text("exposed-token\n")
-    token.chmod(0o644)
-    monkeypatch.delenv("III_RUNTIME_API_CLI_TOKEN", raising=False)
-    monkeypatch.setenv("III_RUNTIME_API_TOKEN_FILE", str(token))
-
-    with pytest.raises(RuntimeApiError, match="owner-only"):
-        RuntimeApiClient.from_env()

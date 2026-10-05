@@ -125,7 +125,7 @@ class FakeRuntime:
         self.error = error
         self.base_urls = []
 
-    def client(self, *, base_url, cli_token, timeout_seconds):
+    def client(self, *, base_url, timeout_seconds):
         self.base_urls.append(base_url)
         runtime = self
 
@@ -147,8 +147,6 @@ def clock(monkeypatch, tmp_path):
     monkeypatch.setattr(host_clock, "_monotonic", fake.monotonic)
     monkeypatch.setattr(host_clock, "_sleep", fake.sleep)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    monkeypatch.delenv("III_RUNTIME_API_CLI_TOKEN", raising=False)
-    monkeypatch.delenv("III_RUNTIME_API_TOKEN_FILE", raising=False)
     monkeypatch.delenv("III_RUNTIME_API_PORT", raising=False)
     return fake
 
