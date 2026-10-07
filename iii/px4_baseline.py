@@ -1,6 +1,7 @@
 """`iii px4 param-baseline`: bring the flight controller to a profile's PX4 baseline.
 
-The baseline is the profile's NSH script in deployment/px4. The command reads
+The baseline is the profile's parameter file in deployment/px4/parameters. The
+command reads
 the flight controller's parameters, shows what differs, and only then writes,
 reboots the flight controller and verifies the result. It refuses unless PX4
 reports the aircraft disarmed and landed.
@@ -39,13 +40,15 @@ _APPLY_TIMEOUT_SECONDS = 240.0
 
 
 def _baseline_directory() -> Path:
-    from iii_drone_contracts.px4_parameters import BaselineError
+    from iii_drone_contracts.px4_parameters import BASELINE_DIRECTORY, BaselineError
 
     current = Path.cwd().resolve()
     for candidate in (current, *current.parents):
-        if (candidate / "deployment/px4").is_dir():
-            return candidate / "deployment/px4"
-    raise BaselineError("run this command from the III workspace (deployment/px4 not found)")
+        if (candidate / BASELINE_DIRECTORY).is_dir():
+            return candidate / BASELINE_DIRECTORY
+    raise BaselineError(
+        f"run this command from the III workspace ({BASELINE_DIRECTORY} not found)"
+    )
 
 
 def _api(args: argparse.Namespace, *, timeout: float) -> RuntimeApiClient:
@@ -327,7 +330,7 @@ def initialize(subparsers: Any) -> None:
         help="set the flight controller's parameters to a profile's PX4 baseline",
         description=(
             "Compare the flight controller with the profile's baseline in "
-            "deployment/px4, show the difference, then write it, reboot the flight "
+            "deployment/px4/parameters, show the difference, then write it, reboot the flight "
             "controller and verify. Refuses unless PX4 reports the aircraft disarmed "
             "and landed. Uses the Pi's MAVLink link when the Pi runs the same "
             "profile, otherwise the flight controller's USB port on this computer. "

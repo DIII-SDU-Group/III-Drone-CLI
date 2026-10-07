@@ -12,7 +12,7 @@ from iii.px4_mavlink import MavlinkError
 from iii.result import Outcome
 from iii.runtime_api_client import RuntimeApiError
 
-BASELINE = "param set UXRCE_DDS_PRT 8888\nparam set UXRCE_DDS_DOM_ID 42\nparam set EKF2_EV_DELAY 30\nparam save\nreboot\n"
+BASELINE = "1\t1\tUXRCE_DDS_PRT\t8888\t6\n1\t1\tUXRCE_DDS_DOM_ID\t42\t6\n1\t1\tEKF2_EV_DELAY\t30.0\t9\n"
 MATCHING = {"UXRCE_DDS_PRT": 8888, "UXRCE_DDS_DOM_ID": 42, "EKF2_EV_DELAY": 30.0}
 HIL_STATE = {"UXRCE_DDS_PRT": 8889, "UXRCE_DDS_DOM_ID": 0, "EKF2_EV_DELAY": 0.0}
 
@@ -45,9 +45,9 @@ class _Link:
 
 @pytest.fixture
 def workspace(monkeypatch, tmp_path: Path):
-    directory = tmp_path / "deployment/px4"
+    directory = tmp_path / "deployment/px4/parameters"
     directory.mkdir(parents=True)
-    for name in ("opti-track.nsh", "real.nsh", "hil-ethernet.nsh"):
+    for name in ("opti_track.params", "real.params", "hil.params"):
         (directory / name).write_text(BASELINE, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(px4_baseline.time, "sleep", lambda _seconds: None)

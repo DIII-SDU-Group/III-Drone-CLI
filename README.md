@@ -67,7 +67,8 @@ proceeds when that state cannot be read, never when the aircraft is reported
 armed or in flight.
 
 `iii px4 param-baseline --profile hil|real|opti_track --host <pi>` brings the
-flight controller to the profile's PX4 baseline (`deployment/px4`): it shows
+flight controller to the profile's PX4 baseline (the standalone parameter
+file `deployment/px4/parameters/<profile>.params`): it shows
 the differing parameters, writes them after confirmation, reboots the flight
 controller and verifies. It goes through the Pi's MAVLink link when the Pi
 runs the same profile, otherwise over the flight controller's USB port on this

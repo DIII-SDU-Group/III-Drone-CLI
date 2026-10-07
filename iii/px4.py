@@ -12,7 +12,7 @@ from .result import CommandResult, Finding, NextAction, Outcome
 
 
 # Pi-side (uXRCE-DDS agent, MAVLink) UDP ports per provisioned profile; they
-# match deployment/ansible/vars and the PX4 NSH baselines in deployment/px4.
+# match deployment/ansible/vars and the PX4 baselines in deployment/px4/parameters.
 _PROFILE_PORTS = {
     "real": (8888, 14540),
     "opti_track": (8888, 14540),
