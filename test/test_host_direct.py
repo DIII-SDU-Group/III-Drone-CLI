@@ -253,7 +253,9 @@ def test_wifi_provisioning_accepts_a_raw_hexadecimal_psk(monkeypatch, tmp_path):
 
 def test_wifi_removal_is_explicit_and_exclusive(monkeypatch, tmp_path):
     _provision_workspace(monkeypatch, tmp_path)
-    status, result, _ = _provision(["--remove-wifi", "--dry-run"], monkeypatch, which=None)
+    status, result, _ = _provision(
+        ["--profile", "hil", "--remove-wifi", "--dry-run"], monkeypatch, which=None
+    )
     assert status == 0
     assert result["payload"]["command"]["command"][-2:] == ["-e", "iii_wifi_remove=true"]
     status, result, _ = _provision(
@@ -261,6 +263,79 @@ def test_wifi_removal_is_explicit_and_exclusive(monkeypatch, tmp_path):
     )
     assert status == 64
     assert result["code"] == "III_USAGE_ERROR"
+
+
+@pytest.mark.parametrize("profile", ["real", "opti_track"])
+def test_real_and_opti_track_cannot_drop_their_wifi_client(monkeypatch, tmp_path, profile):
+    _provision_workspace(monkeypatch, tmp_path)
+    status, result, _ = _provision(
+        ["--profile", profile, "--remove-wifi", "--dry-run"], monkeypatch, which=None
+    )
+    assert status == 64
+    assert result["code"] == "III_DEVELOPER_HOST_WIFI_INPUT_INVALID"
+
+
+def _slot_probe_run(stdout: str, commands: list):
+    class Probe:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(command, **_kwargs):
+        commands.append(list(command))
+        completed = Probe()
+        completed.stdout = stdout if command[0] == "ssh" else "ok"
+        return completed
+
+    return fake_run
+
+
+@pytest.mark.parametrize("profile", ["real", "opti_track"])
+def test_slot_profile_without_a_stored_wifi_client_needs_an_ssid(monkeypatch, tmp_path, profile):
+    _provision_workspace(monkeypatch, tmp_path)
+    commands = []
+    status, result, _ = _provision(
+        ["--profile", profile], monkeypatch, run=_slot_probe_run("", commands)
+    )
+    assert status == 64
+    assert result["code"] == "III_DEVELOPER_HOST_WIFI_REQUIRED"
+    assert "--wifi-ssid" in result["findings"][0]["message"]
+    # Only the read-only slot probe ran; Ansible did not.
+    assert [command[0] for command in commands] == ["ssh"]
+    assert f"/etc/iii/wifi/{profile}.yaml" in commands[0][-1]
+
+
+def test_slot_profile_with_a_stored_wifi_client_provisions_without_wifi_options(monkeypatch, tmp_path):
+    _provision_workspace(monkeypatch, tmp_path)
+    commands = []
+    status, result, _ = _provision(
+        ["--profile", "opti_track"],
+        monkeypatch,
+        run=_slot_probe_run("III_WIFI_SLOT_PRESENT\n", commands),
+    )
+    assert status == 0, result
+    assert [command[0] for command in commands] == ["ssh", "/usr/bin/ansible-playbook"]
+    assert not any("wifi" in argument for argument in commands[1])
+
+
+def test_provisioning_is_refused_when_the_vehicle_gate_fails(monkeypatch, tmp_path):
+    from iii import vehicle_gate
+
+    _provision_workspace(monkeypatch, tmp_path)
+    commands = []
+    monkeypatch.setattr(
+        vehicle_gate,
+        "evaluate",
+        lambda host, user, *, force, **_kwargs: vehicle_gate.RestartGate(
+            False, "real", "vehicle state unknown"
+        ),
+    )
+    status, result, _ = _provision(
+        ["--profile", "hil"], monkeypatch, run=_slot_probe_run("", commands)
+    )
+    assert status != 0
+    assert result["code"] == "III_VEHICLE_GATE_REJECTED"
+    assert "--force" in result["findings"][0]["message"]
+    assert commands == []
 
 
 def test_host_provision_invokes_normal_inventory_and_uses_local_config(monkeypatch, tmp_path):
@@ -287,7 +362,9 @@ def test_host_provision_invokes_normal_inventory_and_uses_local_config(monkeypat
 
     monkeypatch.setattr("iii.host.subprocess.run", fake_run)
     output = StringIO()
-    assert main(["host", "provision", "--host", "pi.local", "--json"], stdout=output) == 0
+    assert main(
+        ["host", "provision", "--host", "pi.local", "--profile", "hil", "--json"], stdout=output
+    ) == 0
     assert observed["command"][1:4] == ["-i", "pi.local,", "-u"]
     assert observed["environment"]["ANSIBLE_CONFIG"] == str(config)
 

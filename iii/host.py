@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 from typing import Any, Mapping, Sequence
 
+from . import vehicle_gate
 from .result import CommandResult, Finding, NextAction, Outcome
 
 
@@ -29,6 +30,13 @@ OPTI_TRACK_LAB_ROS_DOMAIN = 0
 # A preview never reads or writes the Wi-Fi secret; it shows this instead.
 WIFI_VARIABLES_PREVIEW = "@<private 0600 Wi-Fi variables file>"
 WIFI_INPUT_INVALID = "III_DEVELOPER_HOST_WIFI_INPUT_INVALID"
+WIFI_REQUIRED = "III_DEVELOPER_HOST_WIFI_REQUIRED"
+# real and opti_track each keep their own Wi-Fi client on the Pi, in a root-only
+# slot file; provisioning activates the slot of the provisioned profile. These
+# mirror iii_wifi_slot_* in deployment/ansible/vars.
+WIFI_SLOT_PROFILES = ("real", "opti_track")
+WIFI_SLOT_DIRECTORY = "/etc/iii/wifi"
+WIFI_ACTIVE_FILE = "/etc/netplan/85-iii-wifi.yaml"
 ROS_DOMAIN_INVALID = "III_DEVELOPER_HOST_ROS_DOMAIN_INVALID"
 
 
@@ -159,6 +167,36 @@ def _provision_input_error(code: str, message: str, field: str) -> CommandResult
         next_actions=(
             NextAction(("iii", "host", "provision", "--help"), "Review the provisioning options."),
         ),
+    )
+
+
+def _wifi_slot_problem(target: str, profile: str) -> str | None:
+    """Why the Pi has no stored Wi-Fi client for this profile, or None.
+
+    A client that was provisioned for the same profile before slots existed is
+    still the active netplan file; provisioning adopts it as the slot.
+    """
+
+    slot = f"{WIFI_SLOT_DIRECTORY}/{profile}.yaml"
+    script = (
+        f"sudo -n test -s {shlex.quote(slot)} && echo III_WIFI_SLOT_PRESENT && exit 0; "
+        "provisioned=$(sed -n 's/^III_SYSTEM_PROFILE=//p' /etc/iii/runtime.env 2>/dev/null | head -n 1); "
+        f'[ "$provisioned" = {shlex.quote(profile)} ] && sudo -n test -s {WIFI_ACTIVE_FILE} '
+        "&& echo III_WIFI_SLOT_PRESENT; exit 0"
+    )
+    completed = subprocess.run(
+        ["ssh", target, script], check=False, capture_output=True, text=True
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip().splitlines()
+        return "the Pi could not be queried for its stored Wi-Fi client" + (
+            f": {detail[-1]}" if detail else ""
+        )
+    if "III_WIFI_SLOT_PRESENT" in completed.stdout:
+        return None
+    return (
+        f"profile {profile} needs a Wi-Fi client and the Pi has none stored for it; "
+        "pass --wifi-ssid (with --wifi-psk-file) once, later runs reuse it"
     )
 
 
@@ -356,6 +394,25 @@ def provision(args: argparse.Namespace) -> CommandResult:
     except WifiInputError as exc:
         return _provision_input_error(WIFI_INPUT_INVALID, str(exc), "wifi")
     target = f"{args.user}@{args.host}"
+    slot_profile = args.profile in WIFI_SLOT_PROFILES
+    if slot_profile and getattr(args, "remove_wifi", False):
+        return _provision_input_error(
+            WIFI_INPUT_INVALID,
+            f"profile {args.profile} requires a Wi-Fi client; --remove-wifi applies to hil only. "
+            "Replace the stored client with --wifi-ssid instead.",
+            "wifi",
+        )
+    if not dry_run:
+        # Provisioning restarts the daemon and the Runtime API.
+        gate = vehicle_gate.evaluate(
+            args.host, args.user, force=bool(getattr(args, "force", False))
+        )
+        if not gate.allowed:
+            return vehicle_gate.rejection("iii host provision", gate, target=target)
+        if slot_profile and wifi is None:
+            problem = _wifi_slot_problem(target, args.profile)
+            if problem is not None:
+                return _provision_input_error(WIFI_REQUIRED, problem, "wifi")
     command = [
         binary or "ansible-playbook",
         "-i",
@@ -390,7 +447,10 @@ def provision(args: argparse.Namespace) -> CommandResult:
         command="iii host provision",
         target=target,
         result=result,
-        success="Developer host provisioning completed without receiver or trust inputs.",
+        success=(
+            "Developer host provisioning completed; the system daemon and the "
+            "Runtime API were restarted."
+        ),
         failure="Developer host provisioning stopped; inspect the plain Ansible output.",
         dry_run=dry_run,
     )
@@ -458,15 +518,17 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "Join a Wi-Fi network (for example the OptiTrack lab) in addition to the PX4 "
         "and workstation links; Wi-Fi then owns the default route while associated. "
         "The passphrase is read from --wifi-psk-file or prompted for, kept only on "
-        "the Pi, and never passed on a command line. Without these options an "
-        "existing Wi-Fi client is left unchanged.",
+        "the Pi, and never passed on a command line. real and opti_track require a "
+        "Wi-Fi client and each keep their own on the Pi: give it once, and later "
+        "provisioning of that profile activates it again. For hil the client is "
+        "optional and, without these options, left unchanged.",
     )
     wifi_choice = wifi_group.add_mutually_exclusive_group()
     wifi_choice.add_argument("--wifi-ssid", metavar="SSID", help="Wi-Fi network name to join")
     wifi_choice.add_argument(
         "--remove-wifi",
         action="store_true",
-        help="remove the Wi-Fi client configuration from the Pi",
+        help="remove the active Wi-Fi client from the Pi (hil only)",
     )
     wifi_group.add_argument(
         "--wifi-psk-file",
@@ -481,6 +543,14 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "--wifi-country",
         metavar="CC",
         help="two-letter Wi-Fi regulatory domain, for example DK",
+    )
+    provision_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "proceed although the aircraft's disarmed and landed state cannot be read "
+            "(never overrides an armed or flying aircraft)"
+        ),
     )
     provision_parser.set_defaults(func=provision, _iii_mutating=False, _iii_direct_mutation=True)
 

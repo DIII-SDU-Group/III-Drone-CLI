@@ -1,4 +1,4 @@
-"""Read-only PX4 link inspection for the editable developer host."""
+"""PX4 link inspection and parameter baseline for the editable developer host."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 
+from . import px4_baseline
 from .result import CommandResult, Finding, NextAction, Outcome
 
 
@@ -229,3 +230,4 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         ),
     )
     inspect_parser.set_defaults(func=inspect, _iii_mutating=False)
+    px4_baseline.initialize(subparsers)

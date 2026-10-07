@@ -20,6 +20,7 @@ import tempfile
 from time import monotonic, sleep as _sleep, time_ns
 from typing import Any, Mapping, Sequence
 
+from . import vehicle_gate
 from .result import CommandResult, Finding, NextAction, Outcome
 
 
@@ -554,8 +555,7 @@ def _deploy(args: argparse.Namespace, state: dict[str, Any]) -> CommandResult:
             f"deploy dev{' preview' if dry_run else ''}: target={target} workspace={workspace} plan="
             f"{len(sources)} source paths"
             f"{' + cross-build/install' if args.build else ''}"
-            " + Pi CLI installation"
-            f"{' + restart' if args.restart else ''}\n"
+            " + Pi CLI installation + restart\n"
         )
         progress.flush()
     logs = _receipt_root(environment, workspace) / "logs"
@@ -666,6 +666,33 @@ def _deploy(args: argparse.Namespace, state: dict[str, Any]) -> CommandResult:
             progress.flush()
     ssh_options = _deploy_ssh_options(args.host, peer)
     rsync_ssh = "--rsh=" + shlex.join(["ssh", *ssh_options])
+
+    def gate_rejection(stage: str) -> CommandResult | None:
+        """Deployment replaces the runtime's files and restarts its services."""
+
+        if dry_run:
+            return None
+        state["current_stage"] = stage
+        gate = vehicle_gate.evaluate(
+            args.host,
+            args.user,
+            force=bool(getattr(args, "force", False)),
+            ssh_options=ssh_options,
+            api_host=peer,
+        )
+        state.update(current_stage=None, vehicle_gate=gate.as_dict())
+        if progress is not None:
+            progress.write(
+                f"[{'done' if gate.allowed else 'fail'}] {stage}: {gate.reason}\n"
+            )
+            progress.flush()
+        if gate.allowed:
+            return None
+        return vehicle_gate.rejection("iii deploy dev", gate, target=target)
+
+    rejected = gate_rejection("vehicle gate")
+    if rejected is not None:
+        return rejected
     if args.build:
         cross_output = _cross_output_dir(environment, workspace)
         cross_install = cross_output / "install"
@@ -724,6 +751,12 @@ def _deploy(args: argparse.Namespace, state: dict[str, Any]) -> CommandResult:
             results,
             cross_install=cross_install,
         )
+
+    if args.build:
+        # The build took minutes; judge the aircraft again before touching the Pi.
+        rejected = gate_rejection("vehicle gate before synchronization")
+        if rejected is not None:
+            return rejected
 
     source_log = logs / f"source-sync-{time_ns()}.log"
     state.update(
@@ -849,7 +882,9 @@ def _deploy(args: argparse.Namespace, state: dict[str, Any]) -> CommandResult:
             cross_install=cross_install,
         )
 
-    if args.restart:
+    # Every deployment ends with freshly started services, so the Pi never
+    # runs a mix of old processes and new files.
+    if True:
         restart_command = (
             "set -e; "
             f"sudo install -m 0644 {shlex.quote(remote_workspace)}/deployment/systemd/iii-system-daemon.service "
@@ -954,7 +989,8 @@ def _result(
         "build": bool(args.build),
         "cross_build": bool(args.build),
         "cross_install": str(cross_install) if cross_install is not None else None,
-        "restart": bool(args.restart),
+        "restart": True,
+        "vehicle_gate": (state or {}).get("vehicle_gate"),
         "interrupted_stage": interrupted_stage,
         "commands": list(results),
     }

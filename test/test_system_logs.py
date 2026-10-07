@@ -269,6 +269,8 @@ def test_boot_replaces_stale_tmux_session_when_daemon_was_rebooted(monkeypatch):
 def test_boot_reports_daemon_policy_rejection_as_operator_failure(monkeypatch, capsys):
     monkeypatch.setenv("CLI_CONFIGURATION", "dev")
     system = importlib.import_module("iii.system")
+    # The flight controller carries the profile's PX4 baseline.
+    monkeypatch.setattr(system, "_px4_baseline_gate", lambda profile: None)
 
     class _Client:
         def boot(self, profile):

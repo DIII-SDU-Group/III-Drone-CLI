@@ -740,7 +740,7 @@ def test_ctrl_c_before_receipt_write_retries_atomic_interrupted_receipt(monkeypa
     assert result.code == "III_DEVELOPER_DEPLOY_INTERRUPTED"
     receipt = json.loads(Path(result.payload["receipt"]).read_text(encoding="utf-8"))
     assert receipt["interrupted_stage"] == "final receipt"
-    assert [entry["returncode"] for entry in receipt["commands"][:-1]] == [0, 0, 0]
+    assert [entry["returncode"] for entry in receipt["commands"][:-1]] == [0, 0, 0, 0]
     assert receipt["commands"][-1]["stage"] == "final receipt"
 
 
@@ -774,7 +774,7 @@ def test_ctrl_c_after_receipt_commit_replaces_success_with_single_interrupted_re
     assert len(list(receipts.glob("developer-deploy-*.json"))) == 1
     receipt = json.loads(Path(result.payload["receipt"]).read_text(encoding="utf-8"))
     assert receipt["interrupted_stage"] == "final receipt"
-    assert [entry["returncode"] for entry in receipt["commands"]] == [0, 0, 0, 130]
+    assert [entry["returncode"] for entry in receipt["commands"]] == [0, 0, 0, 0, 130]
 
 
 @pytest.mark.parametrize("interrupt_on_append", [1, 2])
@@ -1219,3 +1219,51 @@ def test_broken_outside_child_progress_disables_updates_and_keeps_receipt(monkey
     assert result.code == "III_DEVELOPER_DEPLOY_COMPLETED"
     receipt = json.loads(Path(result.payload["receipt"]).read_text(encoding="utf-8"))
     assert receipt["commands"][0]["returncode"] == 0
+
+
+def _allow_run(monkeypatch, calls):
+    def fake_run(command, **_kwargs):
+        calls.append(list(command))
+        return {"command": list(command), "returncode": 0, "stdout": "", "stderr": "",
+                "log": "fake.log", "interrupted": False}
+
+    monkeypatch.setattr(developer_deploy, "_run", fake_run)
+
+
+def test_every_deployment_restarts_the_daemon_and_the_runtime_api(monkeypatch, tmp_path):
+    workspace = _workspace(tmp_path / "workspace")
+    monkeypatch.setattr(developer_deploy, "_workspace", lambda: workspace)
+    calls = []
+    _allow_run(monkeypatch, calls)
+
+    result = developer_deploy.deploy(_args(workspace, tmp_path / "receipts", restart=False))
+
+    assert result.code == "III_DEVELOPER_DEPLOY_COMPLETED"
+    assert "systemctl restart iii-system-daemon.service iii-runtime-api.service" in calls[-1][-1]
+    receipt = json.loads(Path(result.payload["receipt"]).read_text(encoding="utf-8"))
+    assert receipt["restart"] is True
+    assert receipt["vehicle_gate"]["allowed"] is True
+
+
+def test_deployment_is_refused_before_any_command_when_the_vehicle_gate_fails(monkeypatch, tmp_path):
+    from iii import vehicle_gate
+
+    workspace = _workspace(tmp_path / "workspace")
+    monkeypatch.setattr(developer_deploy, "_workspace", lambda: workspace)
+    calls = []
+    _allow_run(monkeypatch, calls)
+    observed = {}
+
+    def blocked(host, user, *, force, **_kwargs):
+        observed["force"] = force
+        return vehicle_gate.RestartGate(False, "opti_track", "vehicle is armed")
+
+    monkeypatch.setattr(vehicle_gate, "evaluate", blocked)
+
+    result = developer_deploy.deploy(_args(workspace, tmp_path / "receipts", force=True))
+
+    assert result.code == "III_VEHICLE_GATE_REJECTED"
+    assert result.outcome.value == "rejected"
+    assert observed["force"] is True
+    assert calls == []
+    assert "--force does not override" in result.findings[0].message

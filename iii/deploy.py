@@ -44,7 +44,18 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     developer_parser.add_argument(
         "--restart",
         action="store_true",
-        help="restart III runtime services after synchronization/build",
+        help=(
+            "accepted for compatibility: every deployment restarts the system "
+            "daemon and the Runtime API"
+        ),
+    )
+    developer_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "proceed although the aircraft's disarmed and landed state cannot be read "
+            "(never overrides an armed or flying aircraft)"
+        ),
     )
     developer_parser.set_defaults(
         func=developer_deploy.deploy,

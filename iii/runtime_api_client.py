@@ -74,6 +74,16 @@ class RuntimeApiClient:
 
         return self._request("GET", "/cli/vehicle/status")
 
+    def px4_parameter_baseline(self) -> dict[str, Any]:
+        """Compare the flight controller's parameters with the profile's baseline."""
+
+        return self._request("GET", "/cli/px4/parameter-baseline")
+
+    def apply_px4_parameter_baseline(self) -> dict[str, Any]:
+        """Write the baseline through the Pi and reboot the flight controller."""
+
+        return self._request("POST", "/cli/px4/parameter-baseline/apply", {})
+
     def log_tail(self, source_id: str, *, lines: int = 200) -> dict[str, Any]:
         query = urlencode({"lines": lines})
         return self._request("GET", f"/cli/logs/{quote(source_id)}/tail?{query}")

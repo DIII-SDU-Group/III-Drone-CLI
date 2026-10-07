@@ -56,7 +56,24 @@ lab or field Wi-Fi network, add `--wifi-ssid <ssid>` and either
 `--wifi-psk-file <owner-only file outside the checkout>` or the interactive
 passphrase prompt, plus `--wifi-country <CC>` where needed. The passphrase
 reaches Ansible only through a temporary owner-only variables file and is
-stored only on the Pi; `--remove-wifi` removes the Wi-Fi client again.
+stored only on the Pi. `real` and `opti_track` require a Wi-Fi client and each
+keep their own on the Pi: give it once, and later provisioning of that profile
+activates it again. For `hil` it is optional, and `--remove-wifi` removes it.
+
+`iii host provision` and `iii deploy dev` both end by restarting the system
+daemon and the Runtime API. They are refused unless the aircraft is provably
+disarmed and landed (a Pi on `hil` or without a profile passes); `--force`
+proceeds when that state cannot be read, never when the aircraft is reported
+armed or in flight.
+
+`iii px4 param-baseline --profile hil|real|opti_track --host <pi>` brings the
+flight controller to the profile's PX4 baseline (`deployment/px4`): it shows
+the differing parameters, writes them after confirmation, reboots the flight
+controller and verifies. It goes through the Pi's MAVLink link when the Pi
+runs the same profile, otherwise over the flight controller's USB port on this
+computer, and refuses unless PX4 reports disarmed and landed. On `real` and
+`opti_track`, `iii system boot` and `iii system start` are refused while the
+flight controller differs from the baseline.
 
 `iii host clock sync --profile real|opti_track --host <pi> --confirm` runs on
 the ground computer (ground control calls it for an aircraft whose clock is

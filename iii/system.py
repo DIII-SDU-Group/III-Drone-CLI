@@ -120,6 +120,60 @@ def _exit_remote_response(
     exit(0)
 
 
+# Profiles whose flying PX4 is the physical flight controller; mirrors
+# iii_drone_contracts.px4_parameters.CHECKED_PROFILES, which the system Python
+# on the Pi cannot import.
+_PX4_CHECKED_PROFILES = ("real", "opti_track")
+_PX4_BASELINE_SETTLE_SECONDS = 30.0
+
+
+def _px4_baseline_gate(profile: str) -> None:
+    """Refuse a local boot or start against a wrongly configured flight controller.
+
+    On real and opti_track the flight controller must carry the profile's PX4
+    baseline. The Runtime API on this host owns the MAVLink link and judges it,
+    as it does for boots and starts requested through the API.
+    """
+
+    if profile not in _PX4_CHECKED_PROFILES:
+        return
+    hint = f"iii px4 param-baseline --profile {profile}"
+    port = os.environ.get("III_RUNTIME_API_PORT", "8765")
+    client = RuntimeApiClient(base_url=f"http://localhost:{port}", timeout_seconds=30.0)
+    # A freshly restarted Runtime API needs a few seconds to listen and to
+    # connect to PX4; wait that out before judging.
+    deadline = time.monotonic() + _PX4_BASELINE_SETTLE_SECONDS
+    while True:
+        try:
+            state = client.px4_parameter_baseline()
+            failure = None
+        except RuntimeApiError as exc:
+            state, failure = {}, str(exc)
+        settled = failure is None and (
+            state.get("profile") != profile
+            or not state.get("applicable")
+            or state.get("checked")
+        )
+        if settled or time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
+    if failure is not None:
+        print(
+            f"PX4 parameters could not be checked against the {profile} baseline: {failure}. "
+            f"Run `{hint}`."
+        )
+        exit(1)
+    if state.get("profile") != profile:
+        print(
+            f"PX4 parameters could not be checked against the {profile} baseline: the "
+            f"Runtime API on this host runs profile {state.get('profile')}."
+        )
+        exit(1)
+    if state.get("rejection"):
+        print(state["rejection"])
+        exit(1)
+
+
 def _filter_args(parts: list[str]) -> list[str]:
     return [part for part in parts if part]
 
@@ -344,6 +398,7 @@ def start(args):
     if not client.ping():
         print('System daemon not running. Use "iii system boot" first.')
         exit(1)
+    _px4_baseline_gate(_profile_name())
     target = "configured" if args.skip_activate else "active"
     print(
         f"Starting system: target={target}, scope={_scope_text(args.select_nodes, args.include_dependencies)} ...",
@@ -595,6 +650,7 @@ def boot(args):
         action = "rebuilt and verified" if preflight["rebuilt"] else "verified"
         print(f"Mission catalog {action}: {preflight['catalog_hash']}")
 
+    _px4_baseline_gate(profile)
     client = _ensure_local_daemon()
     try:
         response = client.boot(profile)
