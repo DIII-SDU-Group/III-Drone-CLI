@@ -1,3 +1,6 @@
+import shlex
+import sys
+
 from iii.tmux_handler import TmuxHandler
 
 
@@ -39,6 +42,10 @@ def test_tmux_handler_start_materializes_session_commands(monkeypatch):
     assert "-s" in commands[0]
     assert "CLI_CONFIGURATION=dev" in commands[0]
     assert "III_SYSTEM_PROFILE=sim" in commands[0]
+    assert any(
+        f"{shlex.quote(sys.executable)} -m iii system status --watch" in part
+        for part in commands[0]
+    )
     assert any("[tmux pane command exited with status %s]" in part for part in commands[0])
     assert any(command[:2] == ["tmux", "split-window"] for command in commands)
 

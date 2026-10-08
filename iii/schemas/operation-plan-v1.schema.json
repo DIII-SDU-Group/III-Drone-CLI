@@ -15,11 +15,10 @@
     "context": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["target", "profile", "release_id"],
+      "required": ["target", "profile"],
       "properties": {
         "target": {"type": ["string", "null"]},
-        "profile": {"type": ["string", "null"]},
-        "release_id": {"type": ["string", "null"]}
+        "profile": {"type": ["string", "null"]}
       }
     },
     "plan_id": {"type": "string", "pattern": "^[a-f0-9]{64}$"}

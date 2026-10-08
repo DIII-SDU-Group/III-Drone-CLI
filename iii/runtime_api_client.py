@@ -20,25 +20,39 @@ class RuntimeApiClient:
         self,
         *,
         base_url: str,
-        cli_token: str,
-        timeout_seconds: float = 5.0,
+        timeout_seconds: float = 210.0,
     ):
         self.base_url = base_url.rstrip("/")
-        self.cli_token = cli_token
         self.timeout_seconds = timeout_seconds
 
     @classmethod
-    def from_env(cls) -> "RuntimeApiClient":
-        base_url = os.environ.get("III_RUNTIME_API_URL")
-        if not base_url:
-            host = os.environ.get("III_RUNTIME_API_HOST") or os.environ.get("III_SSH_HOST") or "localhost"
+    def from_env(cls, *, endpoint: str | None = None) -> "RuntimeApiClient":
+        if endpoint is not None:
+            host = "localhost" if endpoint == "local" else endpoint
+            if host not in {"localhost", "iii.local"}:
+                raise RuntimeApiError("runtime target endpoint is unsupported")
             port = os.environ.get("III_RUNTIME_API_PORT", "8765")
             base_url = f"http://{host}:{port}"
-        token = os.environ.get("III_RUNTIME_API_CLI_TOKEN", "dev-cli-token")
-        timeout = float(os.environ.get("III_RUNTIME_API_CLI_TIMEOUT_SEC", "5"))
-        return cls(base_url=base_url, cli_token=token, timeout_seconds=timeout)
+        else:
+            base_url = os.environ.get("III_RUNTIME_API_URL")
+        if not base_url:
+            host = (
+                os.environ.get("III_RUNTIME_API_HOST")
+                or os.environ.get("III_SSH_HOST")
+                or "localhost"
+            )
+            port = os.environ.get("III_RUNTIME_API_PORT", "8765")
+            base_url = f"http://{host}:{port}"
+        # A cold system start may consume the supervisor's 120-second external
+        # service gate followed by its 60-second lifecycle discovery gate. The
+        # client must not report failure while that bounded operation is still
+        # progressing on the aircraft.
+        timeout = float(os.environ.get("III_RUNTIME_API_CLI_TIMEOUT_SEC", "210"))
+        return cls(base_url=base_url, timeout_seconds=timeout)
 
-    def command(self, command_id: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    def command(
+        self, command_id: str, parameters: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         return self._request(
             "POST",
             "/cli/commands",
@@ -50,36 +64,86 @@ class RuntimeApiClient:
             },
         )
 
+    def identity(self) -> dict[str, Any]:
+        """Return the remote runtime identity through its public endpoint."""
+
+        return self._request("GET", "/identity")
+
+    def vehicle_status(self) -> dict[str, Any]:
+        """Return the read-only vehicle safety state."""
+
+        return self._request("GET", "/cli/vehicle/status")
+
+    def px4_parameter_baseline(self) -> dict[str, Any]:
+        """Compare the flight controller's parameters with the profile's baseline."""
+
+        return self._request("GET", "/cli/px4/parameter-baseline")
+
+    def apply_px4_parameter_baseline(self) -> dict[str, Any]:
+        """Write the baseline through the Pi and reboot the flight controller."""
+
+        return self._request("POST", "/cli/px4/parameter-baseline/apply", {})
+
     def log_tail(self, source_id: str, *, lines: int = 200) -> dict[str, Any]:
         query = urlencode({"lines": lines})
         return self._request("GET", f"/cli/logs/{quote(source_id)}/tail?{query}")
 
-    def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    def configuration_journal(
+        self,
+        *,
+        expected_profile: str,
+        session_id: str | None,
+        after_sequence: int,
+        limit: int = 250,
+    ) -> dict[str, Any]:
+        query = urlencode(
+            {
+                "expected_profile": expected_profile,
+                "after_sequence": after_sequence,
+                "limit": limit,
+                **({"session_id": session_id} if session_id is not None else {}),
+            }
+        )
+        return self._request("GET", f"/cli/configuration/journal?{query}")
+
+    def configuration_state(self) -> dict[str, Any]:
+        """Return the configuration mirror state."""
+
+        return self._request("GET", "/cli/configuration/state")
+
+    def _request(
+        self, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         data = None
-        headers = {
-            "Accept": "application/json",
-            "X-III-CLI-Token": self.cli_token,
-        }
+        headers = {"Accept": "application/json"}
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
-        request = Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
+        request = Request(
+            f"{self.base_url}{path}", data=data, headers=headers, method=method
+        )
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 response_body = response.read().decode("utf-8")
         except HTTPError as exc:
             raise RuntimeApiError(self._http_error_message(exc)) from exc
         except URLError as exc:
-            raise RuntimeApiError(f"Runtime API unavailable at {self.base_url}: {exc.reason}") from exc
+            raise RuntimeApiError(
+                f"Runtime API unavailable at {self.base_url}: {exc.reason}"
+            ) from exc
         except OSError as exc:
-            raise RuntimeApiError(f"Runtime API unavailable at {self.base_url}: {exc}") from exc
+            raise RuntimeApiError(
+                f"Runtime API unavailable at {self.base_url}: {exc}"
+            ) from exc
 
         if not response_body:
             return {}
         try:
             return json.loads(response_body)
         except json.JSONDecodeError as exc:
-            raise RuntimeApiError(f"Runtime API returned invalid JSON from {self.base_url}{path}") from exc
+            raise RuntimeApiError(
+                f"Runtime API returned invalid JSON from {self.base_url}{path}"
+            ) from exc
 
     def _http_error_message(self, exc: HTTPError) -> str:
         try:

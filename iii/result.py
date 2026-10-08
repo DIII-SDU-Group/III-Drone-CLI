@@ -120,7 +120,6 @@ class CommandResult:
     state: str | None = None
     target: str | None = None
     profile: str | None = None
-    release_id: str | None = None
     evidence: tuple[str, ...] = ()
     payload_schema: str | None = None
     payload: Mapping[str, Any] = field(default_factory=dict)
@@ -154,7 +153,6 @@ class CommandResult:
             "context": {
                 "target": self.target,
                 "profile": self.profile,
-                "release_id": self.release_id,
             },
             "evidence": list(self.evidence),
             "payload_schema": self.payload_schema,
