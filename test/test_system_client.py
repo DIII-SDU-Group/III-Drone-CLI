@@ -1,7 +1,6 @@
 import json
 import socketserver
 import threading
-from pathlib import Path
 from types import SimpleNamespace
 
 from iii.system_client import DaemonClient
@@ -106,3 +105,40 @@ def test_ensure_running_rejects_stray_non_systemd_daemon(tmp_path, monkeypatch):
         assert "not active" in str(exc)
     else:
         raise AssertionError("Expected ensure_running to reject a non-systemd daemon.")
+
+
+def test_local_boot_and_start_hold_the_flight_controller_to_the_px4_baseline(monkeypatch, capsys):
+    import pytest
+
+    from iii import system
+    from iii.runtime_api_client import RuntimeApiError
+
+    def gate(profile, state=None, error=None):
+        class Client:
+            def __init__(self, **_kwargs):
+                pass
+
+            def px4_parameter_baseline(self):
+                if error:
+                    raise RuntimeApiError(error)
+                return state
+
+        monkeypatch.setattr(system, "RuntimeApiClient", Client)
+        monkeypatch.setattr(system, "_PX4_BASELINE_SETTLE_SECONDS", 0.0)
+        system._px4_baseline_gate(profile)
+
+    # Simulated-PX4 profiles never ask; a matching flight controller passes.
+    gate("sim", error="must not be called")
+    gate("hil", error="must not be called")
+    gate("opti_track", {"profile": "opti_track", "rejection": None})
+
+    for state, error, expected in (
+        ({"profile": "real", "rejection": "PX4 parameters differ. Run `iii px4 param-baseline --profile real`."},
+         None, "iii px4 param-baseline --profile real"),
+        (None, "Runtime API unavailable", "iii px4 param-baseline --profile real"),
+        ({"profile": "hil", "rejection": None}, None, "runs profile hil"),
+    ):
+        with pytest.raises(SystemExit) as stopped:
+            gate("real", state, error)
+        assert stopped.value.code == 1
+        assert expected in capsys.readouterr().out

@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+from iii.runtime_api_client import RuntimeApiClient
+
+
+def test_configuration_mirror_transport_uses_cli_endpoints(
+    monkeypatch,
+):
+    import iii.runtime_api_client as module
+
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"ok":true}'
+
+    def open_request(request, **kwargs):
+        requests.append((request, kwargs))
+        return Response()
+
+    monkeypatch.setattr(module, "urlopen", open_request)
+    client = RuntimeApiClient(
+        base_url="http://iii.local:8765",
+        timeout_seconds=9,
+    )
+
+    client.configuration_journal(
+        expected_profile="real",
+        session_id="a" * 64,
+        after_sequence=7,
+        limit=25,
+    )
+    client.configuration_state()
+
+    assert requests[0][0].full_url.endswith(
+        "/cli/configuration/journal?expected_profile=real&after_sequence=7&limit=25&session_id="
+        + "a" * 64
+    )
+    assert requests[1][0].full_url.endswith("/cli/configuration/state")
+    assert len(requests) == 2
+    assert all(kwargs["timeout"] == 9 for _request, kwargs in requests)
+
+
+def test_runtime_api_client_default_timeout_allows_lifecycle_operations(monkeypatch):
+    monkeypatch.delenv("III_RUNTIME_API_CLI_TIMEOUT_SEC", raising=False)
+    monkeypatch.setenv("III_RUNTIME_API_URL", "http://runtime.example")
+
+    client = RuntimeApiClient.from_env()
+
+    assert client.timeout_seconds == 210.0
+
+
+def test_explicit_target_endpoint_overrides_ambient_runtime_url(monkeypatch):
+    monkeypatch.setenv("III_RUNTIME_API_URL", "http://localhost:8765")
+
+    aircraft = RuntimeApiClient.from_env(endpoint="iii.local")
+    simulation = RuntimeApiClient.from_env(endpoint="local")
+
+    assert aircraft.base_url == "http://iii.local:8765"
+    assert simulation.base_url == "http://localhost:8765"
+
+
+def test_identity_and_vehicle_status_use_expected_read_only_endpoints(monkeypatch):
+    import iii.runtime_api_client as module
+
+    requests = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"profile":"hil","armed":false}'
+
+    def open_request(request, **kwargs):
+        requests.append((request, kwargs))
+        return Response()
+
+    monkeypatch.setattr(module, "urlopen", open_request)
+    client = RuntimeApiClient(base_url="http://iii.local:8765")
+
+    assert client.identity()["profile"] == "hil"
+    assert client.vehicle_status()["armed"] is False
+    assert [request.full_url for request, _kwargs in requests] == [
+        "http://iii.local:8765/identity",
+        "http://iii.local:8765/cli/vehicle/status",
+    ]

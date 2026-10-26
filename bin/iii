@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$( cd "$( dirname "$SCRIPT_PATH" )" && pwd )"
 CLI_DIR="$(dirname "$SCRIPT_DIR")"
+WORKSPACE_ROOT="$(cd "$CLI_DIR/../.." && pwd)"
+
+SOURCE_PYTHONPATH="$CLI_DIR"
+for source_root in \
+  "$WORKSPACE_ROOT/src/III-Drone-Contracts" \
+  "$WORKSPACE_ROOT/src/III-Drone-Configuration" \
+  "$WORKSPACE_ROOT/src/III-Drone-Runtime" \
+  "$WORKSPACE_ROOT/src/III-Drone-Supervision"
+do
+  if [[ -d "$source_root" ]]; then
+    SOURCE_PYTHONPATH="$SOURCE_PYTHONPATH:$source_root"
+  fi
+done
 
 if [[ -n "${PYTHONPATH:-}" ]]; then
-  export PYTHONPATH="$CLI_DIR:$PYTHONPATH"
+  export PYTHONPATH="$SOURCE_PYTHONPATH:$PYTHONPATH"
 else
-  export PYTHONPATH="$CLI_DIR"
+  export PYTHONPATH="$SOURCE_PYTHONPATH"
 fi
 
 exec python3 -m iii "$@"

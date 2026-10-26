@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
+import sys
 
 
 TMUX_ENVIRONMENT_NAMES = {
-    "BEHAVIOR_TREES_DIR",
     "CLI_CONFIGURATION",
     "CONFIG_BASE_DIR",
     "CYCLONEDDS_URI",
     "DEBUGGABLE_NODES",
     "LD_LIBRARY_PATH",
-    "MISSION_SPECIFICATION_DIR",
     "NODE_MANAGEMENT_CONFIG_DIR",
     "PATH",
     "PKG_CONFIG_PATH",
@@ -60,6 +60,13 @@ class TmuxHandler:
     def _pane_command(self, command: str) -> str:
         if command.strip() == "bash":
             return command
+        # Direct developer deployments invoke the CLI through ``python -m iii``
+        # from the workspace virtual environment.  That module is available to
+        # tmux through PYTHONPATH, while a standalone ``iii`` executable is not
+        # guaranteed to be on PATH.  Preserve the exact interpreter that
+        # created the session so status/log panes work in both layouts.
+        if command.startswith("iii "):
+            command = f"{shlex.quote(sys.executable)} -m iii {command.removeprefix('iii ')}"
         return "\n".join(
             [
                 command,
