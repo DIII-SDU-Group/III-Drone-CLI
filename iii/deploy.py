@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import developer_deploy
+from . import deploy_missions, developer_deploy
 
 
 def initialize(parser: argparse.ArgumentParser) -> None:
@@ -80,3 +80,5 @@ def initialize(parser: argparse.ArgumentParser) -> None:
     status_parser.add_argument("--host", default="iii.local", help="Pi hostname or IP")
     status_parser.add_argument("--user", default="iii", help="interactive SSH user")
     status_parser.set_defaults(func=developer_deploy.status, _iii_mutating=False)
+
+    deploy_missions.initialize(subparsers)

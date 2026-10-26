@@ -292,7 +292,9 @@ def main(
     setattr(
         args,
         "_iii_progress_stream",
-        err if options.output == "human" and spec.path == ("deploy", "dev") else None,
+        err
+        if options.output == "human" and spec.path in {("deploy", "dev"), ("deploy", "missions")}
+        else None,
     )
     result, diagnostics = invoke(
         args=args,
