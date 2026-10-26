@@ -18,6 +18,7 @@ TARGETS = ("sim", "hil", "real", "opti_track")
 TARGET_PROFILES = {target: target for target in TARGETS}
 ALLOWED_TARGETS = {"dev": {"sim", "hil"}, "deploy": {"real", "opti_track"}}
 RUNTIME_PATHS = {"system", "mission", "api", "rosbag"}
+CONFIG_RUNTIME_PATHS = {("config", "sim"), ("config", "sync")}
 CLI_TREE_RELATIVE = "tools/III-Drone-CLI"
 REMOTE_WORKSPACE = "/home/iii/ws"
 REMOTE_CLI = f"{REMOTE_WORKSPACE}/{CLI_TREE_RELATIVE}/bin/iii"
@@ -76,7 +77,7 @@ def add_target_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
     def visit(current: argparse.ArgumentParser, path: tuple[str, ...]) -> None:
-        if path and (path[0] in RUNTIME_PATHS or path[:2] == ("config", "sim")):
+        if path and (path[0] in RUNTIME_PATHS or path[:2] in CONFIG_RUNTIME_PATHS):
             current.add_argument(
                 "--runtime-target",
                 choices=TARGETS,
@@ -99,7 +100,7 @@ def add_target_arguments(parser: argparse.ArgumentParser) -> None:
 
 def is_runtime_path(path: Sequence[str]) -> bool:
     return bool(path) and (
-        path[0] in RUNTIME_PATHS or tuple(path[:2]) == ("config", "sim")
+        path[0] in RUNTIME_PATHS or tuple(path[:2]) in CONFIG_RUNTIME_PATHS
     )
 
 
@@ -504,8 +505,13 @@ class RuntimeRoute:
         stdout_stream=None,
         stderr_stream=None,
         stdin_stream=None,
+        extra_arguments: Sequence[str] = (),
+        input_text: str | None = None,
     ) -> CommandResult | int:
-        child_args = self._command(argv, output=output, mutating=mutating)
+        child_args = [
+            *self._command(argv, output=output, mutating=mutating),
+            *extra_arguments,
+        ]
         command = self._execution_command(child_args, tty=tty)
         if tty or stream:
             return _run(
@@ -519,7 +525,10 @@ class RuntimeRoute:
         # dead link. Captured commands are bounded so a wedged route fails.
         try:
             completed = _run(
-                command, capture_output=True, timeout=self.timeouts.command_timeout
+                command,
+                capture_output=True,
+                timeout=self.timeouts.command_timeout,
+                **({} if input_text is None else {"input": input_text}),
             )
         except subprocess.TimeoutExpired as exc:
             return self._timeout_result(argv, exc)

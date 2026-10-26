@@ -45,6 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
         "sim", help="inspect and recover this clone's living simulation configuration"
     )
     import_module("iii.config_sim").initialize(parser_config_sim)
+    parser_config_sync = config_commands.add_parser(
+        "sync", help="compare or set a profile's living parameters to the tracked default"
+    )
+    import_module("iii.config_sync").initialize(parser_config_sync)
 
     deploy = import_module("iii.deploy")
     parser_deploy = subparsers.add_parser(
@@ -213,6 +217,9 @@ def main(
         )
         return render(result, output=options.output, stdout=out, stderr=err)
 
+    if tuple(path) == ("config", "sync") and getattr(args, "runtime_target", None) is None:
+        # --profile names the runtime whose living parameters are synchronized.
+        args.runtime_target = getattr(args, "profile", None)
     try:
         route = runtime_routing.prepare_route(path, args, env)
     except runtime_routing.RuntimeRoutingError as exc:
@@ -262,6 +269,19 @@ def main(
                 stderr_stream=err,
             ),
         )
+        if tuple(path) == ("config", "sync"):
+            # The Pi compares with this checkout's tracked default, sent along.
+            provider, action = import_module("iii.config_sync").routed(
+                route,
+                parser_argv,
+                args,
+                output=options.output,
+                stdout_stream=out,
+                stderr_stream=err,
+            )
+            spec = replace(spec, plan_provider=provider)
+            setattr(args, "_iii_command_spec", spec)
+            setattr(args, "func", action)
         native_environment = dict(env)
         native_environment["CLI_CONFIGURATION"] = "host"
         invoke_environment = native_environment

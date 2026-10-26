@@ -1245,6 +1245,43 @@ def test_every_deployment_restarts_the_daemon_and_the_runtime_api(monkeypatch, t
     assert receipt["vehicle_gate"]["allowed"] is True
 
 
+def test_parameters_keep_is_the_default_and_runs_no_parameter_sync(monkeypatch, tmp_path):
+    workspace = _workspace(tmp_path / "workspace")
+    monkeypatch.setattr(developer_deploy, "_workspace", lambda: workspace)
+    calls = []
+    _allow_run(monkeypatch, calls)
+
+    result = developer_deploy.deploy(_args(workspace, tmp_path / "receipts"))
+
+    assert result.code == "III_DEVELOPER_DEPLOY_COMPLETED"
+    assert not any("config sync" in part for call in calls for part in call)
+
+
+def test_parameters_defaults_sends_the_tracked_default_and_syncs_after_the_restart(
+    monkeypatch, tmp_path
+):
+    workspace = _workspace(tmp_path / "workspace")
+    tracked = workspace / developer_deploy.PARAMETER_SETS_SOURCE
+    tracked.mkdir(parents=True)
+    monkeypatch.setattr(developer_deploy, "_workspace", lambda: workspace)
+    calls = []
+    _allow_run(monkeypatch, calls)
+
+    result = developer_deploy.deploy(
+        _args(workspace, tmp_path / "receipts", path=["setup"], parameters="defaults")
+    )
+
+    assert result.code == "III_DEVELOPER_DEPLOY_COMPLETED"
+    # The source default travels although the selected paths leave it out.
+    assert any(f"{tracked}/" in call for call in calls)
+    assert "systemctl restart" in calls[-2][-1]
+    sync = calls[-1][-1]
+    assert "config sync" in sync and "--mode defaults" in sync
+    assert "--confirm --non-interactive" in sync
+    # The Pi's own provisioned profile is the one that is synchronized.
+    assert "/etc/iii/runtime.env" in sync
+
+
 def test_deployment_is_refused_before_any_command_when_the_vehicle_gate_fails(monkeypatch, tmp_path):
     from iii import vehicle_gate
 

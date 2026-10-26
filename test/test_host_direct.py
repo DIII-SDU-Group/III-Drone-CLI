@@ -143,6 +143,7 @@ def test_wifi_provisioning_passes_the_secret_only_through_a_private_file(monkeyp
         "iii_wifi_ssid": TEST_SSID,
         "iii_wifi_psk": TEST_PASSPHRASE,
         "iii_wifi_regulatory_domain": "DK",
+        "iii_wifi_hidden": False,
     }
     # The file is gone after the run, and no output or argv carries the secret.
     assert not observed["path"].exists()
@@ -188,6 +189,26 @@ def test_wifi_provisioning_prompts_for_the_passphrase_without_a_file(monkeypatch
     assert prompts == [f"Wi-Fi passphrase for {TEST_SSID!r}: "]
     assert observed["variables"]["iii_wifi_psk"] == TEST_PASSPHRASE
     assert observed["variables"]["iii_wifi_regulatory_domain"] == ""
+    assert observed["variables"]["iii_wifi_hidden"] is False
+
+
+def test_wifi_provisioning_marks_a_hidden_network(monkeypatch, tmp_path):
+    _provision_workspace(monkeypatch, tmp_path)
+    psk_file = _passphrase_file(tmp_path / "private")
+    observed = {}
+
+    def fake_run(command, **kwargs):
+        observed["variables"] = json.loads(Path(command[-1][1:]).read_text(encoding="utf-8"))
+        return _Completed()
+
+    status, _result, raw = _provision(
+        ["--wifi-ssid", TEST_SSID, "--wifi-psk-file", str(psk_file), "--wifi-hidden"],
+        monkeypatch,
+        run=fake_run,
+    )
+    assert status == 0, raw
+    assert observed["variables"]["iii_wifi_ssid"] == TEST_SSID
+    assert observed["variables"]["iii_wifi_hidden"] is True
 
 
 def test_non_interactive_wifi_provisioning_requires_a_passphrase_file(monkeypatch, tmp_path):
@@ -205,7 +226,10 @@ def test_non_interactive_wifi_provisioning_requires_a_passphrase_file(monkeypatc
 
 @pytest.mark.parametrize(
     "case",
-    ["inside-checkout", "group-readable", "short", "missing", "orphan-file", "orphan-country", "bad-country"],
+    [
+        "inside-checkout", "group-readable", "short", "missing", "orphan-file", "orphan-country",
+        "orphan-hidden", "bad-country",
+    ],
 )
 def test_wifi_provisioning_rejects_unsafe_or_invalid_input(monkeypatch, tmp_path, case):
     workspace = _provision_workspace(monkeypatch, tmp_path)
@@ -222,6 +246,8 @@ def test_wifi_provisioning_rejects_unsafe_or_invalid_input(monkeypatch, tmp_path
         arguments = ["--wifi-psk-file", str(_passphrase_file(tmp_path / "private"))]
     elif case == "orphan-country":
         arguments = ["--wifi-country", "DK"]
+    elif case == "orphan-hidden":
+        arguments = ["--wifi-hidden"]
     else:
         arguments += ["--wifi-psk-file", str(_passphrase_file(tmp_path / "private")), "--wifi-country", "DNK"]
 

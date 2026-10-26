@@ -50,6 +50,17 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         ),
     )
     developer_parser.add_argument(
+        "--parameters",
+        choices=("keep", "defaults"),
+        default="keep",
+        help=(
+            "what happens to the living parameters of the Pi's profile: keep (default) "
+            "leaves tuned values and only adds new parameters at the next start; "
+            "defaults sets them to this checkout's tracked default after saving the "
+            "replaced set as a snapshot"
+        ),
+    )
+    developer_parser.add_argument(
         "--force",
         action="store_true",
         help=(

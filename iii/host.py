@@ -50,6 +50,8 @@ class WifiRequest:
     # None only for a preview, which never asks for or reads the secret.
     passphrase: str | None
     regulatory_domain: str
+    # The network does not broadcast its SSID; the Pi probes for it by name.
+    hidden: bool = False
 
 
 def _ros_domain_id(value: str) -> int:
@@ -119,9 +121,12 @@ def _wifi_request(
     ssid = getattr(args, "wifi_ssid", None)
     psk_file = getattr(args, "wifi_psk_file", None)
     country = getattr(args, "wifi_country", None)
+    hidden = bool(getattr(args, "wifi_hidden", False))
     if ssid is None:
-        if psk_file is not None or country is not None:
-            raise WifiInputError("--wifi-psk-file and --wifi-country need --wifi-ssid")
+        if psk_file is not None or country is not None or hidden:
+            raise WifiInputError(
+                "--wifi-psk-file, --wifi-country and --wifi-hidden need --wifi-ssid"
+            )
         return None
     ssid = _validate_wifi_ssid(ssid)
     regulatory_domain = ""
@@ -132,12 +137,12 @@ def _wifi_request(
     if psk_file is not None:
         passphrase = _read_wifi_passphrase_file(psk_file, workspace)
     elif dry_run:
-        return WifiRequest(ssid, None, regulatory_domain)
+        return WifiRequest(ssid, None, regulatory_domain, hidden)
     else:
         # Under --non-interactive the runner turns this prompt into a typed
         # required-input result instead of blocking.
         passphrase = getpass.getpass(f"Wi-Fi passphrase for {ssid!r}: ")
-    return WifiRequest(ssid, _validate_wifi_passphrase(passphrase), regulatory_domain)
+    return WifiRequest(ssid, _validate_wifi_passphrase(passphrase), regulatory_domain, hidden)
 
 
 def _write_wifi_variables(directory: Path, request: WifiRequest) -> Path:
@@ -151,6 +156,7 @@ def _write_wifi_variables(directory: Path, request: WifiRequest) -> Path:
                 "iii_wifi_ssid": request.ssid,
                 "iii_wifi_psk": request.passphrase,
                 "iii_wifi_regulatory_domain": request.regulatory_domain,
+                "iii_wifi_hidden": request.hidden,
             },
             stream,
         )
@@ -543,6 +549,11 @@ def initialize(parser: argparse.ArgumentParser) -> None:
         "--wifi-country",
         metavar="CC",
         help="two-letter Wi-Fi regulatory domain, for example DK",
+    )
+    wifi_group.add_argument(
+        "--wifi-hidden",
+        action="store_true",
+        help="the network does not broadcast its SSID (for example the OptiTrack lab)",
     )
     provision_parser.add_argument(
         "--force",

@@ -431,6 +431,24 @@ def _remote_command(
     return ["ssh", *ssh_options, target, command]
 
 
+PARAMETER_SETS_SOURCE = "src/III-Drone-Configuration/config/parameter_sets"
+
+
+def _parameter_sync_command(remote_workspace: str) -> str:
+    """Set the provisioned profile's living parameters to the tracked default on the Pi."""
+
+    workspace = shlex.quote(remote_workspace)
+    return "bash -lc " + shlex.quote(
+        "set -e; "
+        "profile=$(sed -n 's/^III_SYSTEM_PROFILE=//p' /etc/iii/runtime.env | head -n 1); "
+        'test -n "$profile" || { echo "the Pi has no provisioned runtime profile" >&2; exit 1; }; '
+        f'source {workspace}/setup/setup_"$profile".bash; '
+        "export CLI_CONFIGURATION=dev; "
+        f'exec {workspace}/tools/III-Drone-CLI/bin/iii config sync --profile "$profile" '
+        "--mode defaults --confirm --non-interactive"
+    )
+
+
 def _pi_cli_install_command(remote_workspace: str) -> str:
     """Build an idempotent Pi-side CLI install and PATH verification."""
 
@@ -521,6 +539,12 @@ def _deploy(args: argparse.Namespace, state: dict[str, Any]) -> CommandResult:
     state["workspace"] = workspace
     try:
         sources = _source_paths(workspace, args.path, include_dirty=bool(args.build))
+        if getattr(args, "parameters", "keep") == "defaults":
+            # The Pi sets its living parameters from this source default, so
+            # it travels even when the configuration component is left out.
+            tracked = workspace / PARAMETER_SETS_SOURCE
+            if not any(tracked == source or source in tracked.parents for source in sources):
+                sources = (*sources, tracked)
     except ValueError as exc:
         return CommandResult(
             command="iii deploy dev",
@@ -896,6 +920,16 @@ def _deploy(args: argparse.Namespace, state: dict[str, Any]) -> CommandResult:
         )
         run_stage(
             _remote_command(target, restart_command, ssh_options=ssh_options), "restart"
+        )
+
+    if getattr(args, "parameters", "keep") == "defaults" and results[-1]["returncode"] in {0, None}:
+        # The restart left the system down, so the configuration server cannot
+        # write its own values back. The command snapshots what it replaces.
+        run_stage(
+            _remote_command(
+                target, _parameter_sync_command(remote_workspace), ssh_options=ssh_options
+            ),
+            "parameter sync",
         )
 
     state["current_stage"] = "final receipt"
